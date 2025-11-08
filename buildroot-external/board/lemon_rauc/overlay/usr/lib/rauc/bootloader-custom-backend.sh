@@ -4,6 +4,10 @@
 # This script implements the RAUC bootloader interface by directly manipulating
 # U-Boot environment variables stored in the userdata partition.
 
+# Désactiver les couleurs dans les appels à fw_printenv/fw_setenv
+export TERM=dumb
+export NO_COLOR=1
+
 set -e
 
 # U-Boot environment configuration (must match lk2nd extlinux.conf settings)
@@ -11,7 +15,7 @@ UBOOT_ENV_PART="/dev/mmcblk0p20"  # userdata partition
 UBOOT_ENV_OFFSET=$((0x10000))      # 64KB offset (0x10000)
 UBOOT_ENV_SIZE=$((0x20000))        # 128KB size (0x20000)
 
-# Helper functions
+# Helper functions (note: we tolerate a missing / invalid env by lazy-init)
 uboot_env_get() {
     local var="$1"
     fw_printenv -n "$var" 2>/dev/null || echo ""
@@ -24,8 +28,21 @@ uboot_env_set() {
 }
 
 # RAUC bootloader backend interface implementation
+ensure_env_defaults() {
+    # Si BOOT_ORDER est absent, laisser lk2nd déjà l'avoir créé ou créer des valeurs cohérentes.
+    local order
+    order=$(uboot_env_get BOOT_ORDER)
+    if [ -z "$order" ]; then
+        # Tenter un set minimal; si fw_setenv échoue pour CRC, lk2nd régénèrera après reboot.
+        fw_setenv BOOT_ORDER "A B" 2>/dev/null || true
+        fw_setenv BOOT_A_LEFT "3" 2>/dev/null || true
+        fw_setenv BOOT_B_LEFT "0" 2>/dev/null || true
+    fi
+}
+
 case "$1" in
     get-primary)
+        ensure_env_defaults
         # Return the slot that will be booted next
         BOOT_ORDER=$(uboot_env_get BOOT_ORDER)
         PRIMARY=$(echo "$BOOT_ORDER" | awk '{print $1}')
@@ -33,6 +50,7 @@ case "$1" in
         ;;
 
     set-primary)
+        ensure_env_defaults
         # Set which slot should be booted next
         SLOT="$2"
 
@@ -48,6 +66,7 @@ case "$1" in
         ;;
 
     get-state)
+        ensure_env_defaults
         # Return the state of a slot (good, bad, or attempts left)
         SLOT="$2"
         LEFT=$(uboot_env_get "BOOT_${SLOT}_LEFT")
@@ -62,6 +81,7 @@ case "$1" in
         ;;
 
     set-state)
+        ensure_env_defaults
         # Set the state of a slot
         SLOT="$2"
         STATE="$3"
