@@ -1,0 +1,79 @@
+#!/bin/sh
+
+DAEMON=/usr/bin/rauc
+NAME=rauc
+DESC="RAUC Update Service"
+PIDFILE=/var/run/rauc.pid
+
+# Initialize U-Boot environment if needed
+init_uboot_env() {
+    # Check if U-Boot environment is initialized
+    if ! fw_printenv BOOT_ORDER >/dev/null 2>&1; then
+        echo "Initializing U-Boot environment for RAUC..."
+
+        # Initialize with slot A as primary
+        fw_setenv BOOT_ORDER "A B"
+        fw_setenv BOOT_A_LEFT "3"
+        fw_setenv BOOT_B_LEFT "0"
+
+        echo "U-Boot environment initialized (Slot A active)"
+    fi
+}
+
+start() {
+    echo -n "Starting $DESC: "
+
+    # Ensure data directory exists
+    mkdir -p /data/rauc
+
+    # Initialize U-Boot environment on first boot
+    if [ ! -f /data/rauc/uboot_env_init_done ]; then
+        init_uboot_env
+        touch /data/rauc/uboot_env_init_done
+    fi
+
+    # Check current slot and mark as good after successful boot
+    if [ ! -f /data/rauc/first_boot_done ]; then
+        echo "First boot detected, marking current slot as good..."
+        $DAEMON --conf=/etc/rauc/system.conf status mark-good 2>/dev/null || true
+        touch /data/rauc/first_boot_done
+    fi
+
+    echo "$NAME."
+}
+
+stop() {
+    echo "Stopping $DESC: $NAME."
+}
+
+status() {
+    echo "=== RAUC Status ==="
+    $DAEMON --conf=/etc/rauc/system.conf status
+    echo ""
+    echo "=== U-Boot Environment ==="
+    echo "BOOT_ORDER: $(fw_printenv -n BOOT_ORDER 2>/dev/null || echo 'not set')"
+    echo "BOOT_A_LEFT: $(fw_printenv -n BOOT_A_LEFT 2>/dev/null || echo 'not set')"
+    echo "BOOT_B_LEFT: $(fw_printenv -n BOOT_B_LEFT 2>/dev/null || echo 'not set')"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

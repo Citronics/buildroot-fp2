@@ -46,19 +46,4 @@ Mounting such "subpartitions" is not something the kernel supports out of the bo
 
 ### I want to have rootfs redundency and A/B partitioning
 
-Let's say we want to be as close as possible to an A/B partitioning setup. We will want to have the following image:
-
-| Image partition table              |
-|------------------------------------|
-| MBR                                |
-| p0*: boot a partition (ext2)       |
-| p0*: boot b partition (ext2)       |
-| p1*: rootfs a (ext4)               |
-| p1*: rootfs b (ext4)               |
-| p2: Application (ext4)             |
-
-Usually, a userspace program would tag the appropriate boot partition, A or B, to be booted next, then the bootloader would try it and if it indeed succeeds in booting, a userspace program will mark the partition as safe to boot. If it didn't boot, a watchdog is triggered during boot, or anything else happens, then the next time the device starts, the bootloader will know and revert back to the previous partition. This is a common behaviour in UBoot for instance, where you can rely on uboot environment variables to do this.
-
-However, we can't use UBoot in our case. We have to use [lk2nd]("./lk2nd.md"). Which doesn't support environment variables and A/B partitioning logic. Moreover, remember that we are in a "subpartition" situation since we flash an entire disk on an existing device partition.
-
-What lk2nd will do if look for an `extlinux.conf` file on the first ext2 partition it finds. Since there is no support from the booloader for more advanced features, the only viable strategy is to use the partition table as a way to "hide" the previous partitions and update it from userspace when there is an update. But there is a caveat, *any update to the kernel or rootfs partition that won't boot cannot be recovered from*. You will have to physically access the device to reflash it.
+Please check the [lemon-rauc README.md](../buildroot-external/board/lemon-rauc/README.md)

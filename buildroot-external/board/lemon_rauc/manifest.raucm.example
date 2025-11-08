@@ -1,0 +1,24 @@
+# Example RAUC manifest file
+# This file is generated automatically by create-rauc-bundle.sh
+# but you can use this as a template for custom bundles
+
+[update]
+compatible=lemon-rauc-v1
+version=1.0.0
+description=Lemon System Update
+
+[bundle]
+format=verity
+
+[image.rootfs]
+filename=rootfs.ext4
+size=314572800
+sha256=<will-be-calculated>
+
+[image.boot]
+filename=boot.ext2
+size=67108864
+sha256=<will-be-calculated>
+
+[hooks]
+filename=hook.sh
