@@ -13,7 +13,7 @@ echo "[install-hook] ========================================"
 
 case "$1" in
     slot-install)
-        echo "[install-hook] Installing image '$RAUC_IMAGE_NAME' to slot '$RAUC_SLOT_NAME'"
+        echo "[install-hook] Update extlinux for slot '$RAUC_SLOT_NAME'"
 
         case "$RAUC_SLOT_NAME" in
             rootfs.0|boot.0)
@@ -33,31 +33,34 @@ case "$1" in
         esac
 
         if [ "$RAUC_IMAGE_NAME" = "boot" ]; then
-            echo "[install-hook] Writing boot image to $BOOT_DEVICE"
-            echo "[install-hook] Source: $RAUC_IMAGE_ARCHIVE"
-            dd if="$RAUC_IMAGE_ARCHIVE" of="$BOOT_DEVICE" bs=4M conv=fsync
-            echo "[install-hook] Boot image written successfully"
+            mount -t ext2 "$BOOT_DEVICE" "$BOOT_MOUNT"
+
+            if [ -f "$BOOT_MOUNT/extlinux/extlinux.conf" ]; then
+                # Update the bootpart and rootfs parameters for the correct slot
+                if [ "$SLOT" = "A" ]; then
+                    sed -i 's|bootpart=/dev/mmcblk0p20p[0-9]|bootpart=/dev/mmcblk0p20p1|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                    sed -i 's|rootfs=/dev/mmcblk0p20p[0-9]|rootfs=/dev/mmcblk0p20p5|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                    sed -i 's|rauc\.slot=[AB]|rauc.slot=A|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                    sed -i 's|menu title.*|menu title Lemon RAUC - Slot A|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                else
+                    sed -i 's|bootpart=/dev/mmcblk0p20p[0-9]|bootpart=/dev/mmcblk0p20p2|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                    sed -i 's|rootfs=/dev/mmcblk0p20p[0-9]|rootfs=/dev/mmcblk0p20p6|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                    sed -i 's|rauc\.slot=[AB]|rauc.slot=B|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                    sed -i 's|menu title.*|menu title Lemon RAUC - Slot B|g' "$BOOT_MOUNT/extlinux/extlinux.conf"
+                fi
+                sync
+                echo "[install-hook] Updated extlinux.conf: bootpart=$BOOT_DEVICE, rootfs=$ROOT_DEVICE, slot=$SLOT"
+            else
+                echo "[install-hook] Warning: extlinux.conf not found in boot partition"
+            fi
+
+            umount "$BOOT_MOUNT"
+            rmdir "$BOOT_MOUNT"
         fi
 
         if [ "$RAUC_IMAGE_NAME" = "rootfs" ]; then
             echo "[install-hook] RAUC will handle rootfs installation automatically (type=ext4)"
         fi
-
-        # Optional: Update extlinux.conf if you can mount the rootfs slot temporarily
-        if [ "$RAUC_IMAGE_NAME" = "rootfs" ]; then
-            echo "[install-hook] Updating extlinux.conf for slot $SLOT"
-            MOUNT_POINT=$(mktemp -d)
-            mount "$ROOT_DEVICE" "$MOUNT_POINT"
-
-            if [ -f "$MOUNT_POINT/boot/extlinux/extlinux.conf" ]; then
-                sed -i "s|rauc\.slot=[AB]|rauc.slot=${SLOT}|g" "$MOUNT_POINT/boot/extlinux/extlinux.conf"
-                echo "[install-hook] Updated extlinux.conf for slot $SLOT"
-            fi
-
-            umount "$MOUNT_POINT"
-            rmdir "$MOUNT_POINT"
-        fi
-        ;;
 esac
 
 echo "[install-hook] Done."
