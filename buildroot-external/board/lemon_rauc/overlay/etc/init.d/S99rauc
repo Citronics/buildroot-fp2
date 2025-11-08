@@ -32,27 +32,43 @@ start() {
         touch /data/rauc/uboot_env_init_done
     fi
 
-    # Always check and mark the current slot as good after successful boot
     echo "Checking boot status of current slot..."
-    # Strip ANSI color codes from rauc output
-    BOOTED_SLOT=$($DAEMON --conf=/etc/rauc/system.conf status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep "booted" | head -n1 | awk '{print $2}' | tr -d '[]')
 
-    if [ -n "$BOOTED_SLOT" ]; then
-        # Extract bootname (A or B) from slot name
-        BOOTNAME=$(echo "$BOOTED_SLOT" | sed 's/rootfs\.\([0-9]\)/\1/' | sed 's/0/A/' | sed 's/1/B/')
+    # Use shell output format for clean parsing (no colors, no parsing issues)
+    eval "$($DAEMON --output-format=shell --conf=/etc/rauc/system.conf status 2>/dev/null)"
 
-        BOOT_STATUS=$($DAEMON --conf=/etc/rauc/system.conf status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -A5 "$BOOTED_SLOT" | grep "boot status:" | awk '{print $3}')
+    # Get the booted slot's bootname directly
+    BOOTNAME="$RAUC_SYSTEM_BOOTED_BOOTNAME"
+
+    if [ -z "$BOOTNAME" ]; then
+        echo "Warning: Could not determine booted slot"
+    else
+        echo "Booted slot: $BOOTNAME"
+
+        # Find the booted slot and check its boot status
+        BOOT_STATUS=""
+        for slot_num in $RAUC_SLOTS; do
+            eval "slot_state=\$RAUC_SLOT_STATE_${slot_num}"
+            eval "slot_bootname=\$RAUC_SLOT_BOOTNAME_${slot_num}"
+            eval "slot_class=\$RAUC_SLOT_CLASS_${slot_num}"
+
+            # Find the rootfs slot that matches our bootname and is booted
+            if [ "$slot_state" = "booted" ] && [ "$slot_class" = "rootfs" ]; then
+                eval "BOOT_STATUS=\$RAUC_SLOT_BOOT_STATUS_${slot_num}"
+                break
+            fi
+        done
 
         if [ "$BOOT_STATUS" != "good" ]; then
-            echo "Boot status is '$BOOT_STATUS', marking slot $BOOTED_SLOT as good..."
+            echo "Boot status is '$BOOT_STATUS', marking slot as good..."
             $DAEMON --conf=/etc/rauc/system.conf status mark-good 2>/dev/null || {
                 echo "Warning: Failed to mark slot as good"
             }
         else
-            echo "Boot status is already good for slot $BOOTED_SLOT"
+            echo "Boot status is already good for slot $BOOTNAME"
         fi
 
-        # Ensure U-Boot environment is synchronized with the booted slot
+        # Ensure U-Boot environment matches current booted slot
         CURRENT_BOOT_ORDER=$(fw_printenv -n BOOT_ORDER 2>/dev/null || echo "")
         CURRENT_PRIMARY=$(echo "$CURRENT_BOOT_ORDER" | awk '{print $1}')
         BOOT_LEFT=$(fw_printenv -n "BOOT_${BOOTNAME}_LEFT" 2>/dev/null || echo "0")
@@ -60,20 +76,16 @@ start() {
         if [ "$CURRENT_PRIMARY" != "$BOOTNAME" ] || [ "$BOOT_LEFT" != "3" ]; then
             echo "Synchronizing U-Boot environment for slot $BOOTNAME..."
 
-            # Set this slot as primary
             if [ "$BOOTNAME" = "A" ]; then
                 fw_setenv BOOT_ORDER "A B"
             else
                 fw_setenv BOOT_ORDER "B A"
             fi
 
-            # Ensure boot attempts are set to 3 (good)
             fw_setenv "BOOT_${BOOTNAME}_LEFT" "3"
 
             echo "U-Boot environment synchronized: BOOT_ORDER=$(fw_printenv -n BOOT_ORDER), BOOT_${BOOTNAME}_LEFT=3"
         fi
-    else
-        echo "Warning: Could not determine booted slot"
     fi
 
     echo "$NAME."
