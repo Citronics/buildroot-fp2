@@ -59,6 +59,7 @@ filename=rootfs.ext4
 
 [image.boot]
 filename=boot.img
+hooks=post-install
 EOF
 
 # Sign and create bundle
