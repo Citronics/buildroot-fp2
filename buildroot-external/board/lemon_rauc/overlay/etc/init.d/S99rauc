@@ -5,54 +5,35 @@ NAME=rauc
 DESC="RAUC Update Service"
 PIDFILE=/var/run/rauc.pid
 
-# Initialize U-Boot environment if needed
 init_uboot_env() {
-    # Check if U-Boot environment is initialized
     if ! fw_printenv BOOT_ORDER >/dev/null 2>&1; then
         echo "Initializing U-Boot environment for RAUC..."
-
-        # Initialize with slot A as primary
         fw_setenv BOOT_ORDER "A B"
         fw_setenv BOOT_A_LEFT "3"
         fw_setenv BOOT_B_LEFT "0"
-
         echo "U-Boot environment initialized (Slot A active)"
     fi
 }
 
 start() {
-    echo -n "Starting $DESC: "
-
-    # Ensure data directory exists
+    echo "Starting $DESC..."
     mkdir -p /data/rauc
 
-    # Initialize U-Boot environment on first boot
+    # Initialize U-Boot environment if needed
     if [ ! -f /data/rauc/uboot_env_init_done ]; then
         init_uboot_env
         touch /data/rauc/uboot_env_init_done
     fi
 
-    echo "Checking boot status of current slot..."
-
-    # Use shell output format for clean parsing (no colors, no parsing issues)
-    eval "$($DAEMON --output-format=shell --conf=/etc/rauc/system.conf status 2>/dev/null)"
-
-    # Get the booted slot's bootname directly
+    # Mark current slot good if needed
+    echo "Checking current slot..."
+    eval "$($DAEMON --output-format=shell status 2>/dev/null)"
     BOOTNAME="$RAUC_SYSTEM_BOOTED_BOOTNAME"
 
-    if [ -z "$BOOTNAME" ]; then
-        echo "Warning: Could not determine booted slot"
-    else
-        echo "Booted slot: $BOOTNAME"
-
-        # Find the booted slot and check its boot status
-        BOOT_STATUS=""
+    if [ -n "$BOOTNAME" ]; then
         for slot_num in $RAUC_SLOTS; do
             eval "slot_state=\$RAUC_SLOT_STATE_${slot_num}"
-            eval "slot_bootname=\$RAUC_SLOT_BOOTNAME_${slot_num}"
             eval "slot_class=\$RAUC_SLOT_CLASS_${slot_num}"
-
-            # Find the rootfs slot that matches our bootname and is booted
             if [ "$slot_state" = "booted" ] && [ "$slot_class" = "rootfs" ]; then
                 eval "BOOT_STATUS=\$RAUC_SLOT_BOOT_STATUS_${slot_num}"
                 break
@@ -60,45 +41,36 @@ start() {
         done
 
         if [ "$BOOT_STATUS" != "good" ]; then
-            echo "Boot status is '$BOOT_STATUS', marking slot as good..."
-            $DAEMON --conf=/etc/rauc/system.conf status mark-good 2>/dev/null || {
-                echo "Warning: Failed to mark slot as good"
-            }
-        else
-            echo "Boot status is already good for slot $BOOTNAME"
-        fi
-
-        # Ensure U-Boot environment matches current booted slot
-        CURRENT_BOOT_ORDER=$(fw_printenv -n BOOT_ORDER 2>/dev/null || echo "")
-        CURRENT_PRIMARY=$(echo "$CURRENT_BOOT_ORDER" | awk '{print $1}')
-        BOOT_LEFT=$(fw_printenv -n "BOOT_${BOOTNAME}_LEFT" 2>/dev/null || echo "0")
-
-        if [ "$CURRENT_PRIMARY" != "$BOOTNAME" ] || [ "$BOOT_LEFT" != "3" ]; then
-            echo "Synchronizing U-Boot environment for slot $BOOTNAME..."
-
-            if [ "$BOOTNAME" = "A" ]; then
-                fw_setenv BOOT_ORDER "A B"
-            else
-                fw_setenv BOOT_ORDER "B A"
-            fi
-
-            fw_setenv "BOOT_${BOOTNAME}_LEFT" "3"
-
-            echo "U-Boot environment synchronized: BOOT_ORDER=$(fw_printenv -n BOOT_ORDER), BOOT_${BOOTNAME}_LEFT=3"
+            echo "Marking slot $BOOTNAME as good..."
+            $DAEMON status mark-good 2>/dev/null || echo "Warning: Failed to mark slot good"
         fi
     fi
 
-    echo "$NAME."
+    # Start RAUC D-Bus daemon if not running
+    if pidof rauc >/dev/null; then
+        echo "RAUC daemon already running."
+    else
+        echo "Launching RAUC D-Bus service..."
+        $DAEMON service &
+        echo $! > "$PIDFILE"
+    fi
+    echo "$NAME started."
 }
 
 stop() {
-    echo "Stopping $DESC: $NAME."
+    echo "Stopping $DESC..."
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null && rm -f "$PIDFILE"
+    else
+        killall $NAME 2>/dev/null
+    fi
+    echo "$NAME stopped."
 }
 
 status() {
     echo "=== RAUC Status ==="
-    $DAEMON --conf=/etc/rauc/system.conf status
-    echo ""
+    $DAEMON status
+    echo
     echo "=== U-Boot Environment ==="
     echo "BOOT_ORDER: $(fw_printenv -n BOOT_ORDER 2>/dev/null || echo 'not set')"
     echo "BOOT_A_LEFT: $(fw_printenv -n BOOT_A_LEFT 2>/dev/null || echo 'not set')"
@@ -106,23 +78,11 @@ status() {
 }
 
 case "$1" in
-    start)
-        start
-        ;;
-    stop)
-        stop
-        ;;
-    restart|reload)
-        stop
-        start
-        ;;
-    status)
-        status
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status}"
-        exit 1
-        ;;
+    start) start ;;
+    stop) stop ;;
+    restart|reload) stop; start ;;
+    status) status ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac
 
 exit 0
