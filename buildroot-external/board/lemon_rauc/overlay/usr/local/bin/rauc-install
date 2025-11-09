@@ -1,7 +1,0 @@
-#!/bin/sh
-# Helper script to install a RAUC bundle (bypass D-Bus)
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <bundle.raucb>" >&2
-    exit 1
-fi
-exec rauc --conf=/etc/rauc/system.conf install "$1"

@@ -57,8 +57,10 @@ case "$1" in
         # Set BOOT_ORDER to prioritize the requested slot
         if [ "$SLOT" = "A" ]; then
             uboot_env_set BOOT_ORDER "A B"
+            uboot_env_set BOOT_A_LEFT "3"
         elif [ "$SLOT" = "B" ]; then
             uboot_env_set BOOT_ORDER "B A"
+            uboot_env_set BOOT_B_LEFT "3"
         else
             echo "ERROR: Invalid slot: $SLOT" >&2
             exit 1

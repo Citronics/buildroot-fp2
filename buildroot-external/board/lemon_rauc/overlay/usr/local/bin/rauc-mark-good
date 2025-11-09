@@ -1,3 +1,0 @@
-#!/bin/sh
-# Helper script to mark current RAUC slot as good (bypass D-Bus)
-exec rauc --conf=/etc/rauc/system.conf status mark-good
