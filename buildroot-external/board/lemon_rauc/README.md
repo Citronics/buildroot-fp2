@@ -4,7 +4,7 @@ This document describes the use of the RAUC A/B update system for the Lemon syst
 
 ## Overview
 
-This configuration implements a robust A/B update system using RAUC (Robust Auto-Update Controller) with a modified version of lk2nd that supports U-Boot environment variables. The system has two complete slots (A and B), each containing a boot partition and a rootfs partition.
+This configuration implements an A/B update system using RAUC (Robust Auto-Update Controller) with a modified version of lk2nd that supports U-Boot environment variables. The system has two complete slots (A and B), each containing a boot partition and a rootfs partition.
 
 ### Prerequisites: Modified lk2nd
 
@@ -17,13 +17,6 @@ The modified lk2nd must implement:
 - Automatic decrement of `BOOT_X_LEFT` counter on each boot
 - Automatic rollback to previous slot if counter reaches 0
 
-Configuration in extlinux.conf:
-```
-rauc_uboot_part userdata
-rauc_uboot_offset 0x10000
-rauc_uboot_size 0x20000
-```
-
 **Boot flow:**
 ```
 lk2nd starts
@@ -32,8 +25,8 @@ Reads BOOT_ORDER from U-Boot env (e.g., "B A")
   ↓
 Reads boot configuration (U-Boot env location and boot slot offsets) from extlinux.conf
   ↓
-If BOOT_ORDER starts with "B": scan for partition labeled "boot-b"
-If BOOT_ORDER starts with "A": scan for partition labeled "boot-a"
+If BOOT_ORDER starts with "B": select boot partition at offset rauc_boot_offset_b
+If BOOT_ORDER starts with "A": select boot partition at offset rauc_boot_offset_a
   ↓
 Mounts the selected boot partition (e.g., /dev/mmcblk0p20p2 for boot-b)
   ↓
@@ -101,31 +94,19 @@ make
 
 After building, you'll find in `output/images/`:
 - `sdcard.img` - Complete image with A/B partitioning (to flash on userdata)
-- `boot-a.ext2` - Boot partition for slot A (with slot-specific extlinux.conf)
-- `boot-b.ext2` - Boot partition for slot B (with slot-specific extlinux.conf)
-- `rootfs-a.ext4` - Rootfs partition for slot A (initially used)
-- `rootfs-b.ext4` - Rootfs partition for slot B
+- `boot-A.ext2` - Boot partition for slot A (with extlinux.conf)
+- `boot-B.ext2` - Boot partition for slot B (with extlinux.conf)
+- `rootfs-A.ext4` - Rootfs partition for slot A (initially used)
+- `rootfs-B.ext4` - Rootfs partition for slot B
 - `data.ext4` - Persistent data partition
 - `update.raucb` - RAUC bundle for updates
 
-### How RAUC Bundle Updates Work
-
-The update bundle contains a **generic boot.ext2** with a placeholder `extlinux.conf`. During installation:
-
-1. **RAUC extracts the bundle** and detects the target slot (e.g., rootfs.1/boot.1 for Slot B)
-2. **RAUC calls the install hook** (`install-hook.sh`) with `RAUC_SLOT_NAME` environment variable
-3. **The hook modifies extlinux.conf** to set the correct devices:
-  - For Slot A (rootfs.0/boot.0): `bootpart=/dev/mmcblk0p20p1 rootfs=/dev/mmcblk0p20p5`
-  - For Slot B (rootfs.1/boot.1): `bootpart=/dev/mmcblk0p20p2 rootfs=/dev/mmcblk0p20p6`
-4. **The hook also updates rauc.slot** kernel parameter for identification
-5. **RAUC writes the modified boot image** to the target boot partition
 
 This approach allows a **single generic bundle** to work for both slots, with slot-specific configuration applied at installation time rather than build time.
 
 **Key files involved**:
-- `board/lemon_rauc/extlinux/extlinux.conf.bundle`: Generic template in bundle
-- `board/lemon_rauc/overlay/etc/rauc/install-hook.sh`: Hook that modifies extlinux.conf
-- `board/lemon_rauc/scripts/create-rauc-bundle.sh`: Creates bundle with hook reference
+- `board/lemon_rauc/extlinux/extlinux.conf`: Generic template used for boot images and bundle
+- `board/lemon_rauc/scripts/create-rauc-bundle.sh`: Creates bundle with `boot.img` and `rootfs.ext4`
 
 ## Initial Installation
 
@@ -175,25 +156,14 @@ The system uses U-Boot environment variables to manage boot:
 1. **Transfer the bundle to the device**:
 
 ```bash
-scp output/images/update.raucb root@lemon:/tmp/
+scp output/images/update.raucb root@lemon:/mnt/data/
 ```
 
 2. **Install the bundle**:
 
 ```bash
-# Use direct mode (bypass D-Bus):
-rauc --conf=/etc/rauc/system.conf install /tmp/update.raucb
-
-# Or use the helper script:
-rauc-install /tmp/update.raucb
+rauc install /mnt/data/update.raucb
 ```
-
-RAUC will:
-- Determine the inactive slot (B if A is active, or A if B is active)
-- Extract and write boot and rootfs images to the inactive slot
-- Update `BOOT_ORDER` to prioritize the new slot
-- Set `BOOT_X_LEFT` to 3 for the new slot
-- Current slot remains available as automatic fallback
 
 3. **Reboot**:
 
@@ -201,22 +171,10 @@ RAUC will:
 reboot
 ```
 
-The system will now:
+The system will now boot and:
 - lk2nd reads `BOOT_ORDER` and boots the new slot
 - lk2nd decrements `BOOT_X_LEFT` (goes to 2)
 - If boot fails 3 times, lk2nd automatically reverts to previous slot
-
-4. **After booting, confirm successful boot**:
-
-```bash
-# Use direct mode:
-rauc --conf=/etc/rauc/system.conf status mark-good
-
-# Or use the helper script:
-rauc-mark-good
-```
-
-**Important**: If you don't mark the slot as good, after 3 boot attempts, lk2nd will automatically revert to the previous slot.
 
 ### Manually Revert to Previous Slot
 
@@ -296,7 +254,7 @@ fw_setenv BOOT_ORDER "B A"
 - **`/etc/rauc/ca.cert.pem`** - CA certificate for bundle verification
 - **`/etc/fw_env.config`** - Configuration for fw_printenv/fw_setenv (U-Boot env access)
 - **`/usr/lib/rauc/bootloader-custom-backend.sh`** - RAUC backend script for lk2nd
-- **`/data/rauc/slot.status`** - Slot status (persistent across boots)
+- **`/mnt/data/rauc/slot.status`** - Slot status (persistent across boots)
 - **Userdata partition offset 0x10000** - U-Boot environment (128KB)
 
 ### U-Boot Environment Variables
@@ -316,14 +274,6 @@ Stored at offset 0x10000 of the complete sdcard.img image (before partitions):
 - Initialization: Created by `init-uboot-env.sh` script during build
 - Runtime access: Via fw_printenv/fw_setenv at `/dev/mmcblk0p20` offset 0x10000
 
-### Slot Lifecycle
-
-1. **Installation**: `BOOT_X_LEFT=3` (new slot installed)
-2. **First boot**: lk2nd decrements → `BOOT_X_LEFT=2`
-3. **Unconfirmed**: lk2nd continues to decrement on each boot
-4. **If `LEFT=0`**: lk2nd switches to next slot in `BOOT_ORDER`
-5. **Confirmed**: `rauc mark-good` → `BOOT_X_LEFT=3` (stable)
-
 ### Custom Bundle Creation
 
 The `create-rauc-bundle.sh` script can be modified to include additional components:
@@ -338,67 +288,9 @@ filename=my-config.conf
 path=/etc/my-config.conf
 ```
 
-## Integration with Modified lk2nd
-
-### How lk2nd Works with RAUC
-
-The modified lk2nd implements the RAUC bootloader interface natively:
-
-**On lk2nd startup:**
-
-1. Reads configuration from `extlinux.conf`:
-   ```
-   rauc_uboot_part userdata
-   rauc_uboot_offset 0x10000
-   rauc_uboot_size 0x20000
-   rauc_boot_part_a boot-a
-   rauc_boot_part_b boot-b
-   ```
-
-2. Opens userdata partition (`/dev/mmcblk0p20`)
-3. Reads U-Boot environment at offset 0x10000 (64KB)
-4. Extracts `BOOT_ORDER` (e.g., "B A")
-5. Extracts `BOOT_B_LEFT` (e.g., 2)
-
-**Partition and slot selection:**
-
-1. Determines active slot from `BOOT_ORDER` (B in the example)
-2. Checks that `BOOT_B_LEFT > 0`
-3. If yes, decrements `BOOT_B_LEFT` (2 → 1) in U-Boot env
-4. **Searches for partition with label "boot-b"** (based on rauc_boot_part_b config)
-5. Mounts that partition (`/dev/mmcblk0p20p2`)
-6. Reads `/extlinux/extlinux.conf` from boot-b partition
-7. Boots using the `linux` label with `rootfs=/dev/mmcblk0p20p6` (rootfs-b)
-
-**If boot fails:**
-
-- After 3 attempts, `BOOT_B_LEFT=0`
-- lk2nd tries next slot in `BOOT_ORDER` (A)
-- **Searches for partition with label "boot-a"**
-- Automatic boot on slot A (rollback)
-
-### Key Configuration Points
-
-**extlinux.conf settings** (present in both boot-a and boot-b partitions):
-```
-rauc_uboot_part userdata       # Partition containing U-Boot environment
-rauc_uboot_offset 0x10000      # Offset within partition (64KB)
-rauc_uboot_size 0x20000        # Environment size (128KB)
-rauc_boot_part_a boot-a        # Label of boot partition for slot A
-rauc_boot_part_b boot-b        # Label of boot partition for slot B
-```
-
-**extlinux.conf differences between slots**:
-- boot-a: `bootpart=/dev/mmcblk0p20p1 rootfs=/dev/mmcblk0p20p5` (rootfs-a)
-- boot-b: `bootpart=/dev/mmcblk0p20p2 rootfs=/dev/mmcblk0p20p6` (rootfs-b)
-
 ## Resources
 
 - [Official RAUC Documentation](https://rauc.readthedocs.io/)
 - [Partitioning Notes](../../docs/partitioning.md)
 - [Fairphone 2 Documentation](../../docs/fairphone2.md)
 - [Bootloader Documentation](../../docs/bootloader.md)
-
-## License
-
-This project is part of buildroot-fp2. See LICENSE at the project root.
