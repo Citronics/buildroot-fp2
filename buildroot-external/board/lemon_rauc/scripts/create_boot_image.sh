@@ -40,13 +40,7 @@ create_boot_image() {
 
     # Copy extlinux.conf depending on slot
     mkdir -p "$STAGING_DIR/extlinux"
-    if [ "$SLOT" = "A" ]; then
-        cp "${BR2_EXTERNAL_CITRONICS_PATH}/board/lemon_rauc/extlinux/extlinux.conf.slot-a" \
-           "$STAGING_DIR/extlinux/extlinux.conf"
-    else
-        cp "${BR2_EXTERNAL_CITRONICS_PATH}/board/lemon_rauc/extlinux/extlinux.conf.slot-b" \
-           "$STAGING_DIR/extlinux/extlinux.conf"
-    fi
+    cp "${BR2_EXTERNAL_CITRONICS_PATH}/board/lemon_rauc/extlinux/extlinux.conf" "$STAGING_DIR/extlinux/"
 
     echo "Staging directory content:"
     ls -lh "$STAGING_DIR"

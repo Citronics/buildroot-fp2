@@ -5,56 +5,71 @@ NAME=rauc
 DESC="RAUC Update Service"
 PIDFILE=/var/run/rauc.pid
 
+# Détermine le slot booté depuis /proc/mounts (plus fiable que RAUC)
+get_booted_slot() {
+    local root_dev=$(awk '$2 == "/" {print $1}' /proc/mounts)
+    case "$root_dev" in
+        *mmcblk0p20p5*) echo "A" ;;  # rootfs.0
+        *mmcblk0p20p6*) echo "B" ;;  # rootfs.1
+        *) echo "unknown" ;;
+    esac
+}
+
 init_uboot_env() {
     if ! fw_printenv BOOT_ORDER >/dev/null 2>&1; then
         echo "Initializing U-Boot environment for RAUC..."
-        fw_setenv BOOT_ORDER "A B"
+        fw_setenv BOOT_ORDER "B A"  # Priorité à B (slot secondaire)
         fw_setenv BOOT_A_LEFT "3"
-        fw_setenv BOOT_B_LEFT "0"
-        echo "U-Boot environment initialized (Slot A active)"
+        fw_setenv BOOT_B_LEFT "3"  # ← Corrigé
+        echo "U-Boot environment initialized (Slot B preferred)"
     fi
 }
 
 start() {
     echo "Starting $DESC..."
-    mkdir -p /data/rauc
+    mkdir -p /mnt/data/rauc
 
     # Initialize U-Boot environment if needed
-    if [ ! -f /data/rauc/uboot_env_init_done ]; then
+    if [ ! -f /mnt/data/rauc/uboot_env_init_done ]; then
         init_uboot_env
-        touch /data/rauc/uboot_env_init_done
+        touch /mnt/data/rauc/uboot_env_init_done
     fi
 
-    # Mark current slot good if needed
-    echo "Checking current slot..."
-    eval "$($DAEMON --output-format=shell status 2>/dev/null)"
-    BOOTNAME="$RAUC_SYSTEM_BOOTED_BOOTNAME"
+    # Détermine le slot booté (méthode fiable)
+    BOOTNAME=$(get_booted_slot)
+    if [ "$BOOTNAME" = "unknown" ]; then
+        echo "Warning: Could not determine booted slot from /proc/mounts"
+        # Fallback: RAUC reported bootname (may be stale)
+        BOOTNAME="$($DAEMON --output-format=shell status 2>/dev/null | awk -F"'" '/^RAUC_SYSTEM_BOOTED_BOOTNAME=/ {print $2}')"
+    fi
 
+    # Marque le slot courant en good si nécessaire (sans dépendre des indices)
     if [ -n "$BOOTNAME" ]; then
-        for slot_num in $RAUC_SLOTS; do
-            eval "slot_state=\$RAUC_SLOT_STATE_${slot_num}"
-            eval "slot_class=\$RAUC_SLOT_CLASS_${slot_num}"
-            if [ "$slot_state" = "booted" ] && [ "$slot_class" = "rootfs" ]; then
-                eval "BOOT_STATUS=\$RAUC_SLOT_BOOT_STATUS_${slot_num}"
+        echo "Current slot: $BOOTNAME"
+        # Inspecte l'état via RAUC en format shell et trouve le rootfs monté sur /
+        eval "$($DAEMON --output-format=shell status 2>/dev/null)"
+        CUR_STATUS=""
+        for n in $RAUC_SLOTS; do
+            eval "clazz=\$RAUC_SLOT_CLASS_${n}"
+            eval "mp=\$RAUC_SLOT_MOUNTPOINT_${n}"
+            if [ "$clazz" = "rootfs" ] && [ "$mp" = "/" ]; then
+                eval "CUR_STATUS=\$RAUC_SLOT_BOOT_STATUS_${n}"
                 break
             fi
         done
 
-        if [ "$BOOT_STATUS" != "good" ]; then
-            echo "Marking slot $BOOTNAME as good..."
-            $DAEMON status mark-good 2>/dev/null || echo "Warning: Failed to mark slot good"
+        if [ "$CUR_STATUS" != "good" ]; then
+            echo "Marking current booted slot as good..."
+            if $DAEMON status mark-good; then
+                fw_setenv "BOOT_${BOOTNAME}_LEFT" "3"
+            else
+                echo "Warning: Failed to mark slot $BOOTNAME as good"
+            fi
         fi
     fi
 
-    # Start RAUC D-Bus daemon if not running
-    if pidof rauc >/dev/null; then
-        echo "RAUC daemon already running."
-    else
-        echo "Launching RAUC D-Bus service..."
-        $DAEMON service &
-        echo $! > "$PIDFILE"
-    fi
-    echo "$NAME started."
+    # Ne pas démarrer le démon RAUC ici: il est D-Bus activé et sera lancé à la demande
+    echo "rauc started."
 }
 
 stop() {
@@ -72,9 +87,7 @@ status() {
     $DAEMON status
     echo
     echo "=== U-Boot Environment ==="
-    echo "BOOT_ORDER: $(fw_printenv -n BOOT_ORDER 2>/dev/null || echo 'not set')"
-    echo "BOOT_A_LEFT: $(fw_printenv -n BOOT_A_LEFT 2>/dev/null || echo 'not set')"
-    echo "BOOT_B_LEFT: $(fw_printenv -n BOOT_B_LEFT 2>/dev/null || echo 'not set')"
+    fw_printenv BOOT_ORDER BOOT_A_LEFT BOOT_B_LEFT
 }
 
 case "$1" in

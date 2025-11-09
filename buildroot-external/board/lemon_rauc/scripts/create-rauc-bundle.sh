@@ -27,7 +27,7 @@ cp "${IMAGES_DIR}/initramfs.gz" "${BOOT_STAGING}/"
 cp "${IMAGES_DIR}/qcom-msm8974pro-fairphone-fp2.dtb" "${BOOT_STAGING}/"
 
 # Copy generic extlinux.conf (will be modified by install hook)
-cp "${BOARD_DIR}/extlinux/extlinux.conf.bundle" "${BOOT_STAGING}/extlinux/extlinux.conf"
+cp "${BOARD_DIR}/extlinux/extlinux.conf" "${BOOT_STAGING}/extlinux/"
 
 # Create boot image
 genext2fs -b $((64 * 1024)) \
@@ -39,11 +39,6 @@ genext2fs -b $((64 * 1024)) \
 echo "Copying rootfs image..."
 cp "${IMAGES_DIR}/rootfs.ext4" "${BUNDLE_DIR}/rootfs.ext4"
 
-# Copy install hook
-echo "Copying install hook..."
-cp "${BOARD_DIR}/overlay/etc/rauc/install-hook.sh" "${BUNDLE_DIR}/install-hook.sh"
-chmod +x "${BUNDLE_DIR}/install-hook.sh"
-
 # Create manifest
 cat > "${BUNDLE_DIR}/manifest.raucm" << EOF
 [update]
@@ -51,15 +46,14 @@ compatible=lemon-rauc-v1
 version=$(date +%Y.%m.%d-%H%M%S)
 description=Lemon RAUC Update Bundle
 
-[hooks]
-filename=install-hook.sh
+[bundle]
+format=plain
 
 [image.rootfs]
 filename=rootfs.ext4
 
 [image.boot]
 filename=boot.img
-hooks=post-install
 EOF
 
 # Sign and create bundle
