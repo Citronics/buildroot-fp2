@@ -5,7 +5,7 @@ NAME=rauc
 DESC="RAUC Update Service"
 PIDFILE=/var/run/rauc.pid
 
-# Détermine le slot booté depuis /proc/mounts (plus fiable que RAUC)
+# Determine the actually booted slot from /proc/mounts (more reliable than RAUC)
 get_booted_slot() {
     local root_dev=$(awk '$2 == "/" {print $1}' /proc/mounts)
     case "$root_dev" in
@@ -18,9 +18,9 @@ get_booted_slot() {
 init_uboot_env() {
     if ! fw_printenv BOOT_ORDER >/dev/null 2>&1; then
         echo "Initializing U-Boot environment for RAUC..."
-        fw_setenv BOOT_ORDER "B A"  # Priorité à B (slot secondaire)
+        fw_setenv BOOT_ORDER "B A"  # Prefer B by default (secondary slot)
         fw_setenv BOOT_A_LEFT "3"
-        fw_setenv BOOT_B_LEFT "3"  # ← Corrigé
+        fw_setenv BOOT_B_LEFT "3"
         echo "U-Boot environment initialized (Slot B preferred)"
     fi
 }
@@ -35,18 +35,18 @@ start() {
         touch /mnt/data/rauc/uboot_env_init_done
     fi
 
-    # Détermine le slot booté (méthode fiable)
+    # Determine the booted slot (reliable method)
     BOOTNAME=$(get_booted_slot)
     if [ "$BOOTNAME" = "unknown" ]; then
         echo "Warning: Could not determine booted slot from /proc/mounts"
-        # Fallback: RAUC reported bootname (may be stale)
+        # Fallback: use RAUC reported bootname (may be stale)
         BOOTNAME="$($DAEMON --output-format=shell status 2>/dev/null | awk -F"'" '/^RAUC_SYSTEM_BOOTED_BOOTNAME=/ {print $2}')"
     fi
 
-    # Marque le slot courant en good si nécessaire (sans dépendre des indices)
+    # Mark the current booted slot as good if needed (without relying on indices)
     if [ -n "$BOOTNAME" ]; then
         echo "Current slot: $BOOTNAME"
-        # Inspecte l'état via RAUC en format shell et trouve le rootfs monté sur /
+        # Inspect RAUC state in shell format and find the rootfs mounted at /
         eval "$($DAEMON --output-format=shell status 2>/dev/null)"
         CUR_STATUS=""
         for n in $RAUC_SLOTS; do
@@ -68,7 +68,7 @@ start() {
         fi
     fi
 
-    # Ne pas démarrer le démon RAUC ici: il est D-Bus activé et sera lancé à la demande
+    # Do not start RAUC daemon here: it is D-Bus activated and will be launched on demand
     echo "rauc started."
 }
 
