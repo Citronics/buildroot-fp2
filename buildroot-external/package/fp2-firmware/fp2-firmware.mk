@@ -17,8 +17,10 @@ endef
 
 define FP2_FIRMWARE_INSTALL_TARGET_CMDS
     mkdir -p $(TARGET_DIR)/lib/firmware/wlan/prima
+    mkdir -p $(TARGET_DIR)/lib/firmware/qcom/sensors
     $(INSTALL) -D -m 0755 $(@D)/* $(TARGET_DIR)/lib/firmware
     $(INSTALL) -D -m 0755 $(BUILD_DIR)/$(FP2_FIRMWARE_ANDROID)-$(FP2_FIRMWARE_ANDROID_COMMIT)/wifi/WCNSS* $(TARGET_DIR)/lib/firmware/wlan/prima/
+    $(INSTALL) -D -m 0644 $(FP2_FIRMWARE_PKGDIR)/sns.reg $(TARGET_DIR)/lib/firmware/qcom/sensors/sns.reg
 endef
 
 $(eval $(generic-package))
