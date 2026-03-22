@@ -25,7 +25,7 @@ done
 for dev in "$ACCEL" "$GYRO" "$MAG" "$PROX" "$LIGHT"; do
   [ -z "$dev" ] && continue
   echo 0 > "$dev/buffer/enable" 2>/dev/null
-  echo 100 > "$dev/buffer/length"
+  echo 1 > "$dev/buffer/length"
   echo 1 > "$dev/buffer/enable"
 done
 
