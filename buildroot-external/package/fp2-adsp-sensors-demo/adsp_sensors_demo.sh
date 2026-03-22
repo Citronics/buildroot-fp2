@@ -14,17 +14,12 @@ MAG=$(find_iio_by_name qcom-smgr-mag)
 PROX=$(find_iio_by_name qcom-smgr-prox)
 LIGHT=$(find_iio_by_name qcom-smgr-light)
 
-# Enable scan elements and buffers only for sensors that exist
-for dev in "$ACCEL" "$GYRO" "$MAG" "$PROX" "$LIGHT"; do
-  [ -z "$dev" ] && continue
-  for f in "$dev"/scan_elements/in_*_en; do
-    [ -f "$f" ] && echo 1 > "$f"
-  done
-done
-
 for dev in "$ACCEL" "$GYRO" "$MAG" "$PROX" "$LIGHT"; do
   [ -z "$dev" ] && continue
   echo 0 > "$dev/buffer/enable" 2>/dev/null
+  for f in "$dev"/scan_elements/in_*_en; do
+    [ -f "$f" ] && echo 1 > "$f"
+  done
   echo 1 > "$dev/buffer/length"
   echo 1 > "$dev/buffer/enable"
 done
