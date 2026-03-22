@@ -29,13 +29,18 @@ for dev in "$ACCEL" "$GYRO" "$MAG" "$PROX" "$LIGHT"; do
   echo 1 > "$dev/buffer/enable"
 done
 
+# Wait for ADSP to start delivering samples after buffer enable
+sleep 1
+
 # Read scale factors (default to 1 if sensor missing)
 ACCEL_SCALE=1
 GYRO_SCALE=1
 MAG_SCALE=1
+LIGHT_SCALE=1
 [ -n "$ACCEL" ] && ACCEL_SCALE=$(cat "$ACCEL/in_accel_scale")
 [ -n "$GYRO" ] && GYRO_SCALE=$(cat "$GYRO/in_anglvel_scale")
 [ -n "$MAG" ] && MAG_SCALE=$(cat "$MAG/in_magn_scale")
+[ -n "$LIGHT" ] && LIGHT_SCALE=$(cat "$LIGHT/in_illuminance_scale")
 
 cleanup() {
   printf "\n"
@@ -141,14 +146,15 @@ while true; do
 
   if [ -n "$PROX" ]; then
     printf "  PROXIMITY\n"
-    printf "    Raw: %6s  (%s)\n\n" "${prox:-?}" "$prox_label"
+    printf "    State:  %s\n\n" "$prox_label"
   else
     printf "  PROXIMITY: not found\n\n"
   fi
 
   if [ -n "$LIGHT" ]; then
+    light_lux=$(awk "BEGIN{printf \"%.1f\", ${light:-0} * $LIGHT_SCALE}")
     printf "  AMBIENT LIGHT\n"
-    printf "    Raw: %6s\n\n" "${light:-?}"
+    printf "    Lux: %8s\n\n" "$light_lux"
   else
     printf "  AMBIENT LIGHT: not found\n\n"
   fi
