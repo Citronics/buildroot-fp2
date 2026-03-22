@@ -1,0 +1,7 @@
+config BR2_PACKAGE_FP2_ADSP_SENSORS_DEMO
+	bool "fp2-adsp-sensors-demo"
+	help
+	  Fairphone 2 demo script that reads all ADSP sensors
+	  (accelerometer, gyroscope, magnetometer, proximity and
+	  ambient light) through IIO and displays live values on
+	  the console.
