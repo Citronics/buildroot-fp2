@@ -8,7 +8,7 @@
 BINARY="$1"
 ROOT="$2"
 DEST="$3"
-TOOLCHAIN_READELF="arm-linux-gnueabihf-readelf"
+TOOLCHAIN_READELF="${4:-arm-linux-gnueabihf-readelf}"
 
 # Tracks already processed libraries to avoid duplication
 PROCESSED=""

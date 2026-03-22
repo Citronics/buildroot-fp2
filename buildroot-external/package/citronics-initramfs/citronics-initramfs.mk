@@ -53,28 +53,28 @@ define CITRONICS_INITRAMFS_INSTALL_TARGET_CMDS
 	done < $(BR2_EXTERNAL)/package/citronics-initramfs/modules
 
 	@echo "Copying required binaries from target to initramfs..."
-    for bin in $(CITRONICS_BINARIES); do \
-        echo "Searching for $$bin..."; \
-        src=""; \
-        for dir in usr/sbin sbin usr/bin bin; do \
-            candidate="$(TARGET_DIR)/$$dir/$$bin"; \
-            echo "  Checking $$candidate..."; \
-            if [ -x "$$candidate" ]; then \
-                src="$$candidate"; \
-                break; \
-            fi; \
-        done; \
-        if [ -z "$$src" ]; then \
-            echo "  Warning: binary $$bin not found in target"; \
-        else \
-            relpath=$$(realpath --relative-to=$(TARGET_DIR) $$src); \
-            dest="$(CITRONICS_INITRAMFS_STAGING)/$$relpath"; \
-            echo "  Copying $$src to $$dest"; \
-            mkdir -p "$$(dirname $$dest)"; \
-            cp -aL "$$src" "$$dest"; \
-    		$(BR2_EXTERNAL)/package/citronics-initramfs/scripts/copy_libs_for_binary.sh $$src $(TARGET_DIR) $(CITRONICS_INITRAMFS_STAGING) ;\
-        fi; \
-    done
+	for bin in $(CITRONICS_BINARIES); do \
+		echo "Searching for $$bin..."; \
+		src=""; \
+		for dir in usr/sbin sbin usr/bin bin; do \
+			candidate="$(TARGET_DIR)/$$dir/$$bin"; \
+			echo "  Checking $$candidate..."; \
+			if [ -x "$$candidate" ]; then \
+				src="$$candidate"; \
+				break; \
+			fi; \
+		done; \
+		if [ -z "$$src" ]; then \
+			echo "  Warning: binary $$bin not found in target"; \
+		else \
+			relpath=$$(realpath --relative-to=$(TARGET_DIR) $$src); \
+			dest="$(CITRONICS_INITRAMFS_STAGING)/$$relpath"; \
+			echo "  Copying $$src to $$dest"; \
+			mkdir -p "$$(dirname $$dest)"; \
+			cp -aL "$$src" "$$dest"; \
+			$(BR2_EXTERNAL)/package/citronics-initramfs/scripts/copy_libs_for_binary.sh $$src $(TARGET_DIR) $(CITRONICS_INITRAMFS_STAGING) $(TARGET_READELF) ;\
+		fi; \
+	done
 
 	cd $(CITRONICS_INITRAMFS_STAGING)/bin && \
 		ln -sf busybox sh && \
