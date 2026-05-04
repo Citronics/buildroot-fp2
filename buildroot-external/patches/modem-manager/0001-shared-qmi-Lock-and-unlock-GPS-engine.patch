@@ -1,0 +1,197 @@
+From 90843b7a0d51f4422b7c51754c3282f0f6bb1280 Mon Sep 17 00:00:00 2001
+From: Richard Acayan <mailingradian@gmail.com>
+Date: Mon, 14 Apr 2025 19:22:48 -0400
+Subject: [PATCH] shared-qmi: Lock and unlock GPS engine when starting and
+ stopping
+
+Newer modem firmware requires the use of the GPS engine lock, which
+controls what the GPS engine can do. Set the GPS engine lock when
+appropriate to handle this newer firmware.
+
+Signed-off-by: Richard Acayan <mailingradian@gmail.com>
+---
+ src/mm-shared-qmi.c | 133 +++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 107 insertions(+), 26 deletions(-)
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index 2f597c76..98f1135d 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -5093,16 +5093,16 @@ pds_gps_service_state_stop_ready (QmiClientPds *client,
+ }
+ 
+ static void
+-loc_stop_ready (QmiClientLoc *client,
+-                GAsyncResult *res,
+-                GTask        *task)
++loc_lock_engine_ready (QmiClientLoc *client,
++                       GAsyncResult *res,
++                       GTask        *task)
+ {
+-    MMSharedQmi             *self;
+-    Private                 *priv;
+-    QmiMessageLocStopOutput *output;
+-    GError                  *error = NULL;
++    MMSharedQmi                      *self;
++    Private                          *priv;
++    QmiMessageLocSetEngineLockOutput *output;
++    GError                           *error = NULL;
+ 
+-    output = qmi_client_loc_stop_finish (client, res, &error);
++    output = qmi_client_loc_set_engine_lock_finish (client, res, &error);
+     if (!output) {
+         g_prefix_error (&error, "QMI operation failed: ");
+         g_task_return_error (task, error);
+@@ -5110,15 +5110,17 @@ loc_stop_ready (QmiClientLoc *client,
+         return;
+     }
+ 
+-    if (!qmi_message_loc_stop_output_get_result (output, &error)) {
+-        g_prefix_error (&error, "Couldn't stop GPS engine: ");
++    if (!qmi_message_loc_set_engine_lock_output_get_result (output, &error)
++     && !g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NO_PERMISSION)) {
++        g_prefix_error (&error, "Couldn't lock GPS engine: ");
+         g_task_return_error (task, error);
+         g_object_unref (task);
+-        qmi_message_loc_stop_output_unref (output);
++        qmi_message_loc_set_engine_lock_output_unref (output);
+         return;
+     }
+ 
+-    qmi_message_loc_stop_output_unref (output);
++    g_clear_error (&error);
++    qmi_message_loc_set_engine_lock_output_unref (output);
+ 
+     self = g_task_get_source_object (task);
+     priv = get_private (self);
+@@ -5135,6 +5137,45 @@ loc_stop_ready (QmiClientLoc *client,
+     g_object_unref (task);
+ }
+ 
++static void
++loc_stop_ready (QmiClientLoc *client,
++                GAsyncResult *res,
++                GTask        *task)
++{
++    QmiMessageLocStopOutput         *output;
++    QmiMessageLocSetEngineLockInput *input;
++    GError                          *error = NULL;
++
++    output = qmi_client_loc_stop_finish (client, res, &error);
++    if (!output) {
++        g_prefix_error (&error, "QMI operation failed: ");
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    if (!qmi_message_loc_stop_output_get_result (output, &error)) {
++        g_prefix_error (&error, "Couldn't stop GPS engine: ");
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        qmi_message_loc_stop_output_unref (output);
++        return;
++    }
++
++    qmi_message_loc_stop_output_unref (output);
++
++    input = qmi_message_loc_set_engine_lock_input_new ();
++    qmi_message_loc_set_engine_lock_input_set_lock_type (input, QMI_LOC_LOCK_TYPE_ALL, NULL);
++    qmi_client_loc_set_engine_lock (QMI_CLIENT_LOC (client),
++                                    input,
++                                    10,
++                                    NULL,
++                                    (GAsyncReadyCallback) loc_lock_engine_ready,
++                                    task);
++    qmi_message_loc_set_engine_lock_input_unref (input);
++
++}
++
+ static void
+ stop_gps_engine (MMSharedQmi         *self,
+                  GAsyncReadyCallback  callback,
+@@ -5666,6 +5707,49 @@ loc_start_ready (QmiClientLoc *client,
+     qmi_message_loc_register_events_input_unref (input);
+ }
+ 
++static void
++loc_unlock_engine_ready (QmiClientLoc *client,
++                         GAsyncResult *res,
++                         GTask        *task)
++{
++    QmiMessageLocStartInput          *input;
++    QmiMessageLocSetEngineLockOutput *output;
++    GError                           *error = NULL;
++
++    output = qmi_client_loc_set_engine_lock_finish (client, res, &error);
++    if (!output) {
++        g_prefix_error (&error, "QMI operation failed: ");
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    if (!qmi_message_loc_set_engine_lock_output_get_result (output, &error)
++     && !g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NO_PERMISSION)) {
++        g_prefix_error (&error, "Couldn't unlock GPS engine: ");
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        qmi_message_loc_set_engine_lock_output_unref (output);
++        return;
++    }
++
++    g_clear_error (&error);
++    qmi_message_loc_set_engine_lock_output_unref (output);
++
++    input = qmi_message_loc_start_input_new ();
++    qmi_message_loc_start_input_set_session_id (input, DEFAULT_LOC_SESSION_ID, NULL);
++    qmi_message_loc_start_input_set_intermediate_report_state (input, QMI_LOC_INTERMEDIATE_REPORT_STATE_DISABLE, NULL);
++    qmi_message_loc_start_input_set_minimum_interval_between_position_reports (input, 1000, NULL);
++    qmi_message_loc_start_input_set_fix_recurrence_type (input, QMI_LOC_FIX_RECURRENCE_TYPE_REQUEST_PERIODIC_FIXES, NULL);
++    qmi_client_loc_start (QMI_CLIENT_LOC (client),
++                          input,
++                          10,
++                          NULL,
++                          (GAsyncReadyCallback) loc_start_ready,
++                          task);
++    qmi_message_loc_start_input_unref (input);
++}
++
+ static void
+ start_gps_engine (MMSharedQmi         *self,
+                   GAsyncReadyCallback  callback,
+@@ -5703,20 +5787,17 @@ start_gps_engine (MMSharedQmi         *self,
+                                         MM_PORT_QMI_FLAG_DEFAULT,
+                                         NULL);
+     if (client) {
+-        QmiMessageLocStartInput *input;
+-
+-        input = qmi_message_loc_start_input_new ();
+-        qmi_message_loc_start_input_set_session_id (input, DEFAULT_LOC_SESSION_ID, NULL);
+-        qmi_message_loc_start_input_set_intermediate_report_state (input, QMI_LOC_INTERMEDIATE_REPORT_STATE_DISABLE, NULL);
+-        qmi_message_loc_start_input_set_minimum_interval_between_position_reports (input, 1000, NULL);
+-        qmi_message_loc_start_input_set_fix_recurrence_type (input, QMI_LOC_FIX_RECURRENCE_TYPE_REQUEST_PERIODIC_FIXES, NULL);
+-        qmi_client_loc_start (QMI_CLIENT_LOC (client),
+-                              input,
+-                              10,
+-                              NULL,
+-                              (GAsyncReadyCallback) loc_start_ready,
+-                              task);
+-        qmi_message_loc_start_input_unref (input);
++        QmiMessageLocSetEngineLockInput *input;
++
++        input = qmi_message_loc_set_engine_lock_input_new ();
++        qmi_message_loc_set_engine_lock_input_set_lock_type (input, QMI_LOC_LOCK_TYPE_MT, NULL);
++        qmi_client_loc_set_engine_lock (QMI_CLIENT_LOC (client),
++                                        input,
++                                        10,
++                                        NULL,
++                                        (GAsyncReadyCallback) loc_unlock_engine_ready,
++                                        task);
++        qmi_message_loc_set_engine_lock_input_unref (input);
+         return;
+     }
+ 
+-- 
+2.43.0
+

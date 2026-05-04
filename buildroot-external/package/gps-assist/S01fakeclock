@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# S01fakeclock - set system clock to build time on boot
+#
+# Devices without a battery-backed RTC start at epoch 0.
+# This sets the clock to at least the image build time so
+# TLS, GPS time injection, and log timestamps are usable.
+#
+
+TIMESTAMP_FILE="/etc/build-timestamp"
+
+start() {
+	if [ ! -f "$TIMESTAMP_FILE" ]; then
+		return 0
+	fi
+
+	BUILD_TS=$(cat "$TIMESTAMP_FILE")
+	CURRENT_TS=$(date +%s)
+
+	# Only step forward, never backward
+	if [ "$CURRENT_TS" -lt "$BUILD_TS" ]; then
+		date -s "@${BUILD_TS}" > /dev/null
+		printf 'Clock set to build time: %s\n' "$(date)"
+	fi
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop|restart|reload)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac

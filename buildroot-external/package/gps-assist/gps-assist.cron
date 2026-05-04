@@ -1,0 +1,2 @@
+# Refresh GPS XTRA data every 12 hours
+0 */12 * * *	root	/usr/bin/gps-assist refresh >> /var/log/gps-assist.log 2>&1

@@ -15,3 +15,5 @@
 *.pyc
 log.txt
 *.pem
+.sisyphus/
+QMI_LOC_INJECT_ANALYSIS.md

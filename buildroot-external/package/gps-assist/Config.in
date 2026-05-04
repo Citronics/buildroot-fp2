@@ -1,0 +1,8 @@
+config BR2_PACKAGE_GPS_ASSIST
+	bool "GPS assistance data service"
+	help
+	  Downloads and injects XTRA predicted orbit data into the
+	  Qualcomm modem to reduce GPS time-to-first-fix (TTFF).
+
+	  Runs at boot and optionally refreshes XTRA data periodically
+	  via a cron job (requires a cron daemon to be enabled).

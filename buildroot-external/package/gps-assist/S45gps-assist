@@ -1,0 +1,58 @@
+#!/bin/sh
+#
+# S45gps-assist - GPS assistance data injection at boot
+#
+# Runs after S44modem-manager and S39sim-selector.
+# Downloads XTRA data and injects it into the modem to improve GPS TTFF.
+#
+
+DAEMON="gps-assist"
+PIDFILE="/var/run/${DAEMON}.pid"
+LOGFILE="/var/log/${DAEMON}.log"
+
+start() {
+	printf 'Starting %s: ' "$DAEMON"
+	# Run in background so we don't block the boot sequence.
+	# The script will wait for the modem internally.
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" \
+		--startas /bin/sh -- -c "/usr/bin/gps-assist inject >> $LOGFILE 2>&1"
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	return "$status"
+}
+
+stop() {
+	printf 'Stopping %s: ' "$DAEMON"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	rm -f "$PIDFILE"
+	return "$status"
+}
+
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+	start|stop|restart)
+		"$1"
+		;;
+	reload)
+		restart
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+		;;
+esac

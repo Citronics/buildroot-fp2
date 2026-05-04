@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# NetworkManager dispatcher script for GPS assistance data.
+# Triggers XTRA download when connectivity becomes available.
+#
+
+IFACE="$1"
+ACTION="$2"
+LOCKFILE="/var/run/gps-assist-dispatch.lock"
+
+case "$ACTION" in
+	up|connectivity-change)
+		# Single-flight: skip if another instance is already running
+		if [ -f "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE")" 2>/dev/null; then
+			exit 0
+		fi
+
+		# Only act if we can actually reach the internet
+		wget -q -O /dev/null --spider http://xtrapath1.izatcloud.net/xtra3grc.bin 2>/dev/null || exit 0
+
+		# Let chrony sync the clock before GPS time injection
+		chronyc makestep > /dev/null 2>&1
+		sleep 2
+
+		/usr/bin/gps-assist refresh >> /var/log/gps-assist.log 2>&1 &
+		echo $! > "$LOCKFILE"
+		;;
+esac

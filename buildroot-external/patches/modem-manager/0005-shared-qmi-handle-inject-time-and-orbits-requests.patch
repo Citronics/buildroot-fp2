@@ -1,0 +1,283 @@
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index 05060fe..7a36f50 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -90,6 +90,9 @@ typedef struct {
+     gchar                         **loc_assistance_data_servers;
+     guint32                         loc_assistance_data_max_file_size;
+     guint32                         loc_assistance_data_max_part_size;
++    gulong                          loc_assistance_inject_time_req_indication_id;
++    gulong                          loc_assistance_inject_orbits_req_indication_id;
++    gboolean                        loc_assistance_injection_active;
+ 
+     /* Carrier config helpers */
+     gboolean  config_active_default;
+@@ -119,6 +122,10 @@ private_free (Private *priv)
+         g_object_unref (priv->pds_client);
+     if (priv->loc_location_nmea_indication_id)
+         g_signal_handler_disconnect (priv->loc_client, priv->loc_location_nmea_indication_id);
++    if (priv->loc_assistance_inject_time_req_indication_id)
++        g_signal_handler_disconnect (priv->loc_client, priv->loc_assistance_inject_time_req_indication_id);
++    if (priv->loc_assistance_inject_orbits_req_indication_id)
++        g_signal_handler_disconnect (priv->loc_client, priv->loc_assistance_inject_orbits_req_indication_id);
+     if (priv->loc_client)
+         g_object_unref (priv->loc_client);
+     if (priv->uim_slot_status_indication_id)
+@@ -5130,6 +5137,15 @@ loc_stop_ready (QmiClientLoc *client,
+             g_signal_handler_disconnect (priv->loc_client, priv->loc_location_nmea_indication_id);
+             priv->loc_location_nmea_indication_id = 0;
+         }
++        if (priv->loc_assistance_inject_time_req_indication_id != 0) {
++            g_signal_handler_disconnect (priv->loc_client, priv->loc_assistance_inject_time_req_indication_id);
++            priv->loc_assistance_inject_time_req_indication_id = 0;
++        }
++        if (priv->loc_assistance_inject_orbits_req_indication_id != 0) {
++            g_signal_handler_disconnect (priv->loc_client, priv->loc_assistance_inject_orbits_req_indication_id);
++            priv->loc_assistance_inject_orbits_req_indication_id = 0;
++        }
++        priv->loc_assistance_injection_active = FALSE;
+         g_clear_object (&priv->loc_client);
+     }
+ 
+@@ -5228,6 +5244,209 @@ loc_location_nmea_indication_cb (QmiClientLoc               *client,
+     mm_iface_modem_location_gps_update (MM_IFACE_MODEM_LOCATION (self), nmea);
+ }
+ 
++/*****************************************************************************/
++/* Location: Inject UTC time (backported from upstream 81101b01) */
++
++typedef struct {
++    guint         timeout_id;
++    gulong        indication_id;
++    QmiClientLoc *client;
++} InjectTimeContext;
++
++static void
++inject_time_context_cleanup_action (InjectTimeContext *ctx)
++{
++    if (ctx->timeout_id) {
++        g_source_remove (ctx->timeout_id);
++        ctx->timeout_id = 0;
++    }
++    if (ctx->indication_id) {
++        if (ctx->client)
++            g_signal_handler_disconnect (ctx->client, ctx->indication_id);
++        ctx->indication_id = 0;
++    }
++}
++
++static void
++inject_time_context_free (InjectTimeContext *ctx)
++{
++    inject_time_context_cleanup_action (ctx);
++    g_clear_object (&ctx->client);
++    g_slice_free (InjectTimeContext, ctx);
++}
++
++static void
++inject_time_finish_task (GTask  *_task,
++                         GError *error)
++{
++    InjectTimeContext *ctx;
++    g_autoptr(GTask)   task = _task;
++
++    ctx = g_task_get_task_data (task);
++    inject_time_context_cleanup_action (ctx);
++    if (error)
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++}
++
++static gboolean
++loc_location_inject_time_indication_timed_out (GTask *task)
++{
++    inject_time_finish_task (task, g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
++                                                "Operation timed out"));
++    return G_SOURCE_REMOVE;
++}
++
++static void
++loc_location_inject_time_indication_cb (QmiClientLoc                        *client,
++                                        QmiIndicationLocInjectUtcTimeOutput *output,
++                                        GTask                               *task)
++{
++    QmiLocIndicationStatus  status;
++    GError                 *error = NULL;
++
++    if (!qmi_indication_loc_inject_utc_time_output_get_indication_status (output, &status, &error))
++        g_prefix_error (&error, "QMI operation failed: ");
++    else
++        mm_error_from_qmi_loc_indication_status (status, &error);
++    inject_time_finish_task (task, error);
++}
++
++static void
++loc_location_inject_time_ready (QmiClientLoc *client,
++                                GAsyncResult *res,
++                                GTask        *task)
++{
++    g_autoptr(QmiMessageLocInjectUtcTimeOutput)  output = NULL;
++    GError                                      *error = NULL;
++
++    output = qmi_client_loc_inject_utc_time_finish (client, res, &error);
++    if (!output) {
++        g_prefix_error (&error, "QMI operation failed: ");
++        inject_time_finish_task (task, error);
++        return;
++    }
++
++    if (!qmi_message_loc_inject_utc_time_output_get_result (output, &error)) {
++        inject_time_finish_task (task, error);
++        return;
++    }
++}
++
++static void
++loc_location_inject_time_req_indication_cb (QmiClientLoc                            *client,
++                                            QmiIndicationLocInjectTimeRequestOutput *output,
++                                            MMSharedQmi                             *self)
++{
++    g_autoptr(QmiMessageLocInjectUtcTimeInput)  input = NULL;
++    guint64                                     utc_ms = 0;
++    GTask                                      *task;
++    InjectTimeContext                          *ctx;
++
++    mm_obj_dbg (self, "modem requested UTC time injection");
++
++    task = g_task_new (self, NULL, NULL, NULL);
++    ctx = g_slice_new0 (InjectTimeContext);
++    g_task_set_task_data (task, ctx, (GDestroyNotify)inject_time_context_free);
++
++    ctx->client = g_object_ref (client);
++
++    input = qmi_message_loc_inject_utc_time_input_new ();
++
++    utc_ms = g_get_real_time () / 1000;
++    qmi_message_loc_inject_utc_time_input_set_utc_time (input, utc_ms, NULL);
++    qmi_message_loc_inject_utc_time_input_set_time_uncertainty (input, 1000, NULL);
++    qmi_message_loc_inject_utc_time_input_set_time_source (input, QMI_LOC_INJECTED_TIME_SOURCE_UNKNOWN, NULL);
++
++    mm_obj_dbg (self, "injecting UTC time: %" G_GUINT64_FORMAT " ms", utc_ms);
++
++    ctx->timeout_id = g_timeout_add_seconds (10,
++                                             (GSourceFunc) loc_location_inject_time_indication_timed_out,
++                                             task);
++
++    ctx->indication_id = g_signal_connect (client,
++                                           "inject-utc-time",
++                                           G_CALLBACK (loc_location_inject_time_indication_cb),
++                                           task);
++
++    qmi_client_loc_inject_utc_time (
++        QMI_CLIENT_LOC (ctx->client),
++        input,
++        10,
++        NULL, /* cancellable */
++        (GAsyncReadyCallback)loc_location_inject_time_ready,
++        task);
++}
++
++/*****************************************************************************/
++/* Location: Inject predicted orbits on modem request */
++
++static void
++loc_inject_orbits_on_demand_ready (MMIfaceModemLocation *self,
++                                   GAsyncResult         *res,
++                                   gpointer              user_data)
++{
++    Private        *priv;
++    g_autoptr(GError) error = NULL;
++
++    priv = get_private (MM_SHARED_QMI (self));
++    priv->loc_assistance_injection_active = FALSE;
++
++    if (!mm_shared_qmi_location_inject_assistance_data_finish (self, res, &error)) {
++        mm_obj_warn (self, "on-demand XTRA injection failed: %s", error->message);
++    } else {
++        mm_obj_info (self, "on-demand XTRA injection succeeded");
++    }
++}
++
++static void
++loc_location_inject_predicted_orbits_req_indication_cb (QmiClientLoc                                       *client,
++                                                        QmiIndicationLocInjectPredictedOrbitsRequestOutput *output,
++                                                        MMSharedQmi                                        *self)
++{
++    Private  *priv;
++    guint8   *file_data = NULL;
++    gsize     file_size = 0;
++    GError   *error = NULL;
++
++    priv = get_private (self);
++
++    mm_obj_dbg (self, "modem requested predicted orbits injection");
++
++    /* Single-flight guard: don't start a second injection while one is running */
++    if (priv->loc_assistance_injection_active) {
++        mm_obj_dbg (self, "XTRA injection already in progress, skipping");
++        return;
++    }
++
++    if (!g_file_get_contents ("/var/cache/gps/xtra.bin",
++                              (gchar **)&file_data, &file_size, &error)) {
++        mm_obj_warn (self, "couldn't read cached XTRA data: %s", error->message);
++        g_error_free (error);
++        return;
++    }
++
++    if (file_size == 0) {
++        mm_obj_warn (self, "cached XTRA data is empty");
++        g_free (file_data);
++        return;
++    }
++
++    mm_obj_info (self, "injecting cached XTRA data on modem request (%" G_GSIZE_FORMAT " bytes)", file_size);
++
++    priv->loc_assistance_injection_active = TRUE;
++
++    mm_shared_qmi_location_inject_assistance_data (
++        MM_IFACE_MODEM_LOCATION (self),
++        file_data,
++        file_size,
++        (GAsyncReadyCallback) loc_inject_orbits_on_demand_ready,
++        NULL);
++
++    g_free (file_data);
++}
++
+ /*****************************************************************************/
+ /* Location: internal helper: setup minimum required NMEA traces */
+ 
+@@ -5665,6 +5884,31 @@ loc_start_ready (QmiClientLoc *client,
+ 
+     qmi_message_loc_start_output_unref (output);
+ 
++    /* Connect inject-request signal handlers BEFORE sending Register Events.
++     * The modem sends 0x0028/0x0029 indications nearly simultaneously with
++     * the Register Events response, so handlers must be ready first. */
++    {
++        MMSharedQmi *self;
++        Private     *priv;
++
++        self = g_task_get_source_object (task);
++        priv = get_private (self);
++
++        priv->loc_assistance_inject_time_req_indication_id =
++            g_signal_connect (client,
++                              "inject-time-request",
++                              G_CALLBACK (loc_location_inject_time_req_indication_cb),
++                              self);
++
++        priv->loc_assistance_inject_orbits_req_indication_id =
++            g_signal_connect (client,
++                              "inject-predicted-orbits-request",
++                              G_CALLBACK (loc_location_inject_predicted_orbits_req_indication_cb),
++                              self);
++
++        priv->loc_assistance_injection_active = FALSE;
++    }
++
+     input = qmi_message_loc_register_events_input_new ();
+     event_mask = QMI_LOC_EVENT_REGISTRATION_FLAG_POSITION_REPORT |
+                  QMI_LOC_EVENT_REGISTRATION_FLAG_GNSS_SATELLITE_INFO |

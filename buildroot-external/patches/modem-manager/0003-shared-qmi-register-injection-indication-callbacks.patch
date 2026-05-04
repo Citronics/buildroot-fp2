@@ -1,0 +1,241 @@
+From 57915757af8b403e0290983d0904ca120234efc8 Mon Sep 17 00:00:00 2001
+From: Marc Lainez <marc.lainez@gmail.com>
+Date: Sun, 3 May 2026 17:27:46 +0200
+Subject: [PATCH] shared-qmi: register injection indication callbacks before
+ sending request
+
+It might be too late to register the indication callbacks after the
+response is received. The modem may send the indication before the
+response callback has a chance to register the signal handler, causing
+the injection to always time out.
+
+Register the callbacks when the request is made so an indication will
+always be handled. This applies the same fix pattern as commit 0d693047
+("Register NMEA types indication callbacks earlier") but for the
+InjectXtraData and InjectPredictedOrbitsData code paths.
+
+A GCancellable is added to allow the indication handler or timeout to
+cancel the pending request, preventing double-handling of the task.
+---
+ src/mm-shared-qmi.c | 121 +++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 96 insertions(+), 25 deletions(-)
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index b993f74..baaed60 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -6832,6 +6832,7 @@ mm_shared_qmi_location_load_supported_assistance_data (MMIfaceModemLocation  *se
+ 
+ typedef struct {
+     QmiClientLoc *client;
++    GCancellable *req_cancel;
+     guint8       *data;
+     goffset       data_size;
+     gulong        total_parts;
+@@ -6850,6 +6851,10 @@ inject_assistance_data_context_free (InjectAssistanceDataContext *ctx)
+             g_source_remove (ctx->timeout_id);
+         if (ctx->indication_id)
+             g_signal_handler_disconnect (ctx->client, ctx->indication_id);
++        if (ctx->req_cancel) {
++            g_cancellable_cancel (ctx->req_cancel);
++            g_object_unref (ctx->req_cancel);
++        }
+         g_object_unref (ctx->client);
+     }
+     g_free (ctx->data);
+@@ -6872,6 +6877,15 @@ loc_location_inject_data_indication_timed_out (GTask *task)
+     ctx = g_task_get_task_data (task);
+     ctx->timeout_id = 0;
+ 
++    if (ctx->indication_id) {
++        g_signal_handler_disconnect (ctx->client, ctx->indication_id);
++        ctx->indication_id = 0;
++    }
++    if (ctx->req_cancel) {
++        g_cancellable_cancel (ctx->req_cancel);
++        g_object_unref (g_steal_pointer (&ctx->req_cancel));
++    }
++
+     g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
+                              "Failed to receive indication with the server update result");
+     g_object_unref (task);
+@@ -6911,6 +6925,11 @@ out:
+     g_signal_handler_disconnect (ctx->client, ctx->indication_id);
+     ctx->indication_id = 0;
+ 
++    if (ctx->req_cancel) {
++        g_cancellable_cancel (ctx->req_cancel);
++        g_object_unref (g_steal_pointer (&ctx->req_cancel));
++    }
++
+     inject_xtra_data_next (task);
+ }
+ 
+@@ -6923,24 +6942,33 @@ inject_xtra_data_ready (QmiClientLoc *client,
+     InjectAssistanceDataContext       *ctx;
+     GError                            *error = NULL;
+ 
+-    ctx = g_task_get_task_data (task);
+-
+     output = qmi_client_loc_inject_xtra_data_finish (client, res, &error);
+     if (!output || !qmi_message_loc_inject_xtra_data_output_get_result (output, &error)) {
++        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
++            g_error_free (error);
++            goto out;
++        }
++
++        ctx = g_task_get_task_data (task);
++        if (ctx->indication_id) {
++            g_signal_handler_disconnect (ctx->client, ctx->indication_id);
++            ctx->indication_id = 0;
++        }
++        if (ctx->timeout_id) {
++            g_source_remove (ctx->timeout_id);
++            ctx->timeout_id = 0;
++        }
++        if (ctx->req_cancel) {
++            g_object_unref (g_steal_pointer (&ctx->req_cancel));
++        }
++
+         g_task_return_error (task, error);
+         g_object_unref (task);
+         goto out;
+     }
+ 
+-    /* The task ownership is shared between signal and timeout; the one which is
+-     * scheduled first will cancel the other. */
+-    ctx->indication_id = g_signal_connect (ctx->client,
+-                                           "inject-xtra-data",
+-                                           G_CALLBACK (loc_location_inject_xtra_data_indication_cb),
+-                                           task);
+-    ctx->timeout_id = g_timeout_add_seconds (10,
+-                                             (GSourceFunc)loc_location_inject_data_indication_timed_out,
+-                                             task);
++    /* On success, do nothing. The indication handler or timeout will
++     * take ownership of the task lifecycle. */
+ out:
+     if (output)
+         qmi_message_loc_inject_xtra_data_output_unref (output);
+@@ -6994,13 +7022,30 @@ inject_xtra_data_next (GTask *task)
+ 
+     mm_obj_dbg (self, "injecting xtra data: %" G_GSIZE_FORMAT " bytes (%u/%u)",
+                 count, (guint) ctx->n_part, (guint) ctx->total_parts);
++
++    /* Register indication handler and timeout BEFORE sending the request
++     * to avoid a race where the indication arrives before the handler
++     * is connected. */
++    g_assert (!ctx->req_cancel);
++    ctx->req_cancel = g_cancellable_new ();
++
+     qmi_client_loc_inject_xtra_data (ctx->client,
+                                      input,
+                                      10,
+-                                     NULL,
++                                     ctx->req_cancel,
+                                      (GAsyncReadyCallback) inject_xtra_data_ready,
+                                      task);
+ 
++    g_assert (!ctx->indication_id);
++    ctx->indication_id = g_signal_connect (ctx->client,
++                                           "inject-xtra-data",
++                                           G_CALLBACK (loc_location_inject_xtra_data_indication_cb),
++                                           task);
++    g_assert (!ctx->timeout_id);
++    ctx->timeout_id = g_timeout_add_seconds (10,
++                                             (GSourceFunc)loc_location_inject_data_indication_timed_out,
++                                             task);
++
+     qmi_message_loc_inject_xtra_data_input_unref (input);
+ }
+ 
+@@ -7053,6 +7098,11 @@ out:
+     g_signal_handler_disconnect (ctx->client, ctx->indication_id);
+     ctx->indication_id = 0;
+ 
++    if (ctx->req_cancel) {
++        g_cancellable_cancel (ctx->req_cancel);
++        g_object_unref (g_steal_pointer (&ctx->req_cancel));
++    }
++
+     inject_assistance_data_next (task);
+ }
+ 
+@@ -7065,11 +7115,27 @@ inject_predicted_orbits_data_ready (QmiClientLoc *client,
+     InjectAssistanceDataContext                  *ctx;
+     GError                                       *error = NULL;
+ 
+-    ctx = g_task_get_task_data (task);
+-
+     output = qmi_client_loc_inject_predicted_orbits_data_finish (client, res, &error);
+     if (!output || !qmi_message_loc_inject_predicted_orbits_data_output_get_result (output, &error)) {
+-        /* Try with InjectXtra if InjectPredictedOrbits is unsupported */
++        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
++            g_error_free (error);
++            goto out;
++        }
++
++        ctx = g_task_get_task_data (task);
++
++        if (ctx->indication_id) {
++            g_signal_handler_disconnect (ctx->client, ctx->indication_id);
++            ctx->indication_id = 0;
++        }
++        if (ctx->timeout_id) {
++            g_source_remove (ctx->timeout_id);
++            ctx->timeout_id = 0;
++        }
++        if (ctx->req_cancel) {
++            g_object_unref (g_steal_pointer (&ctx->req_cancel));
++        }
++
+         if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NOT_SUPPORTED)) {
+             g_error_free (error);
+             inject_xtra_data (task);
+@@ -7081,15 +7147,6 @@ inject_predicted_orbits_data_ready (QmiClientLoc *client,
+         goto out;
+     }
+ 
+-    /* The task ownership is shared between signal and timeout; the one which is
+-     * scheduled first will cancel the other. */
+-    ctx->indication_id = g_signal_connect (ctx->client,
+-                                           "inject-predicted-orbits-data",
+-                                           G_CALLBACK (loc_location_inject_predicted_orbits_data_indication_cb),
+-                                           task);
+-    ctx->timeout_id = g_timeout_add_seconds (10,
+-                                             (GSourceFunc)loc_location_inject_data_indication_timed_out,
+-                                             task);
+ out:
+     if (output)
+         qmi_message_loc_inject_predicted_orbits_data_output_unref (output);
+@@ -7147,13 +7204,27 @@ inject_assistance_data_next (GTask *task)
+ 
+     mm_obj_dbg (self, "injecting predicted orbits data: %" G_GSIZE_FORMAT " bytes (%u/%u)",
+                 count, (guint) ctx->n_part, (guint) ctx->total_parts);
++
++    g_assert (!ctx->req_cancel);
++    ctx->req_cancel = g_cancellable_new ();
++
+     qmi_client_loc_inject_predicted_orbits_data (ctx->client,
+                                                  input,
+                                                  10,
+-                                                 NULL,
++                                                 ctx->req_cancel,
+                                                  (GAsyncReadyCallback) inject_predicted_orbits_data_ready,
+                                                  task);
+ 
++    g_assert (!ctx->indication_id);
++    ctx->indication_id = g_signal_connect (ctx->client,
++                                           "inject-predicted-orbits-data",
++                                           G_CALLBACK (loc_location_inject_predicted_orbits_data_indication_cb),
++                                           task);
++    g_assert (!ctx->timeout_id);
++    ctx->timeout_id = g_timeout_add_seconds (10,
++                                             (GSourceFunc)loc_location_inject_data_indication_timed_out,
++                                             task);
++
+     qmi_message_loc_inject_predicted_orbits_data_input_unref (input);
+ }
+ 
+-- 
+2.43.0
+

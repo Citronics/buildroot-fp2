@@ -1,0 +1,121 @@
+From e5510feed71971a3d5b721c11dedbfb6ee057475 Mon Sep 17 00:00:00 2001
+From: Marc Lainez <marc.lainez@gmail.com>
+Date: Sun, 3 May 2026 18:10:09 +0200
+Subject: [PATCH] shared-qmi: register all LOC events and fall back to xtra
+ injection on timeout
+
+Register a comprehensive set of QMI LOC event flags matching what
+Android's GPS HAL expects, not just NMEA. Old Qualcomm modem firmware
+(designed for Android) may require these registrations before it will
+process injection requests or send back indications.
+
+When InjectPredictedOrbitsData times out or returns a QMI timeout error
+(modem firmware silently ignoring the message), fall back to
+InjectXtraData instead of aborting. Previously the fallback only
+triggered on QMI_PROTOCOL_ERROR_NOT_SUPPORTED.
+---
+ src/mm-shared-qmi.c | 33 +++++++++++++++++++++++++++++----
+ 1 file changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index baaed60..05060fe 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -5644,6 +5644,7 @@ loc_start_ready (QmiClientLoc *client,
+ {
+     QmiMessageLocRegisterEventsInput *input;
+     QmiMessageLocStartOutput         *output;
++    guint64                           event_mask;
+     GError                           *error = NULL;
+ 
+     output = qmi_client_loc_start_finish (client, res, &error);
+@@ -5665,8 +5666,16 @@ loc_start_ready (QmiClientLoc *client,
+     qmi_message_loc_start_output_unref (output);
+ 
+     input = qmi_message_loc_register_events_input_new ();
++    event_mask = QMI_LOC_EVENT_REGISTRATION_FLAG_POSITION_REPORT |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_GNSS_SATELLITE_INFO |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_NMEA |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_TIME_REQUEST |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_PREDICTED_ORBITS_REQUEST |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_POSITION_REQUEST |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_ENGINE_STATE |
++                 QMI_LOC_EVENT_REGISTRATION_FLAG_FIX_SESSION_STATE;
+     qmi_message_loc_register_events_input_set_event_registration_mask (
+-        input, QMI_LOC_EVENT_REGISTRATION_FLAG_NMEA, NULL);
++        input, event_mask, NULL);
+     qmi_client_loc_register_events (client,
+                                     input,
+                                     10,
+@@ -6841,6 +6850,7 @@ typedef struct {
+     guint         timeout_id;
+     goffset       i;
+     gulong        n_part;
++    gboolean      using_predicted_orbits;
+ } InjectAssistanceDataContext;
+ 
+ static void
+@@ -6869,11 +6879,16 @@ mm_shared_qmi_location_inject_assistance_data_finish (MMIfaceModemLocation  *sel
+     return g_task_propagate_boolean (G_TASK (res), error);
+ }
+ 
++static void inject_xtra_data_next (GTask *task);
++static void inject_xtra_data      (GTask *task);
++
+ static gboolean
+ loc_location_inject_data_indication_timed_out (GTask *task)
+ {
++    MMSharedQmi                *self;
+     InjectAssistanceDataContext *ctx;
+ 
++    self = g_task_get_source_object (task);
+     ctx = g_task_get_task_data (task);
+     ctx->timeout_id = 0;
+ 
+@@ -6886,14 +6901,21 @@ loc_location_inject_data_indication_timed_out (GTask *task)
+         g_object_unref (g_steal_pointer (&ctx->req_cancel));
+     }
+ 
++    /* If InjectPredictedOrbitsData timed out (modem may not support it),
++     * fall back to InjectXtraData before giving up entirely. */
++    if (ctx->using_predicted_orbits) {
++        mm_obj_dbg (self, "predicted orbits injection timed out, falling back to xtra data injection");
++        ctx->using_predicted_orbits = FALSE;
++        inject_xtra_data (task);
++        return G_SOURCE_REMOVE;
++    }
++
+     g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
+                              "Failed to receive indication with the server update result");
+     g_object_unref (task);
+     return G_SOURCE_REMOVE;
+ }
+ 
+-static void inject_xtra_data_next (GTask *task);
+-
+ static void
+ loc_location_inject_xtra_data_indication_cb (QmiClientLoc                         *client,
+                                              QmiIndicationLocInjectXtraDataOutput *output,
+@@ -7136,8 +7158,10 @@ inject_predicted_orbits_data_ready (QmiClientLoc *client,
+             g_object_unref (g_steal_pointer (&ctx->req_cancel));
+         }
+ 
+-        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NOT_SUPPORTED)) {
++        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NOT_SUPPORTED) ||
++            g_error_matches (error, QMI_CORE_ERROR, QMI_CORE_ERROR_TIMEOUT)) {
+             g_error_free (error);
++            ctx->using_predicted_orbits = FALSE;
+             inject_xtra_data (task);
+             goto out;
+         }
+@@ -7270,6 +7294,7 @@ mm_shared_qmi_location_inject_assistance_data (MMIfaceModemLocation *self,
+ 
+     mm_obj_dbg (self, "injecting gpsOneXTRA data (%" G_GOFFSET_FORMAT " bytes)...", ctx->data_size);
+ 
++    ctx->using_predicted_orbits = TRUE;
+     inject_assistance_data_next (task);
+ }
+ 
+-- 
+2.43.0
+

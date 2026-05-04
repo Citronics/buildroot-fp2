@@ -1,0 +1,324 @@
+#!/bin/sh
+#
+# gps-assist - GPS assistance data manager for Qualcomm modems
+#
+# Downloads XTRA predicted orbit data and injects it into the modem
+# via QMI LOC to reduce GPS time-to-first-fix.
+#
+# Usage: gps-assist {inject|refresh|status}
+#
+
+XTRA_URLS="http://xtrapath1.izatcloud.net/xtra3grc.bin
+http://xtrapath2.izatcloud.net/xtra3grc.bin
+http://xtrapath3.izatcloud.net/xtra3grc.bin"
+
+CACHE_DIR="/var/cache/gps"
+XTRA_CACHE="${CACHE_DIR}/xtra.bin"
+XTRA_TMP="${CACHE_DIR}/xtra.bin.tmp"
+
+# XTRA data is valid for ~7 days, refresh after 3 days
+XTRA_MAX_AGE_SECONDS=259200
+
+MODEM_WAIT_TIMEOUT=45
+MMCLI_WAIT_TIMEOUT=60
+
+# Auto-detected at runtime
+MODEM_INDEX=""
+
+log() {
+	logger -t gps-assist "$@"
+	echo "gps-assist: $*"
+}
+
+# Wait for ModemManager to see a modem and resolve its index.
+# The modem index is not always 0 — it increments when MM restarts.
+# Sets MODEM_INDEX on success, returns 1 on failure.
+wait_for_modem_manager() {
+	if [ -n "$MODEM_INDEX" ]; then
+		# Verify the cached index is still valid
+		if mmcli -m "$MODEM_INDEX" > /dev/null 2>&1; then
+			return 0
+		fi
+		MODEM_INDEX=""
+	fi
+
+	count=0
+	while [ "$count" -lt "$MMCLI_WAIT_TIMEOUT" ]; do
+		# Extract the first modem index from mmcli -L output
+		# e.g. "/org/freedesktop/ModemManager1/Modem/3 [QUALCOMM ...]" -> 3
+		idx=$(mmcli -L 2>/dev/null | sed -n 's|.*/Modem/\([0-9]*\).*|\1|p' | head -1)
+		if [ -n "$idx" ]; then
+			MODEM_INDEX="$idx"
+			log "ModemManager modem found at index ${MODEM_INDEX}"
+			return 0
+		fi
+		sleep 1
+		count=$((count + 1))
+	done
+
+	log "WARNING: ModemManager did not detect modem after ${MMCLI_WAIT_TIMEOUT}s"
+	return 1
+}
+
+# Check if the modem is in a state where XTRA injection works.
+# Returns 0 if the modem is functional, 1 if it's in a failed state.
+modem_is_functional() {
+	if [ -z "$MODEM_INDEX" ]; then
+		return 1
+	fi
+
+	state=$(mmcli -m "$MODEM_INDEX" 2>/dev/null | grep "state:" | head -1)
+	case "$state" in
+		*failed*)
+			reason=$(mmcli -m "$MODEM_INDEX" 2>/dev/null | grep "failed reason:" | sed 's/.*: *//')
+			log "Modem is in failed state: ${reason}"
+			return 1
+			;;
+	esac
+	return 0
+}
+
+# Check if cached XTRA data needs refreshing.
+# Returns 0 (true) if download is needed.
+xtra_needs_refresh() {
+	[ ! -f "$XTRA_CACHE" ] && return 0
+
+	file_age=$(date -r "$XTRA_CACHE" +%s 2>/dev/null)
+	now=$(date +%s 2>/dev/null)
+	if [ -n "$file_age" ] && [ -n "$now" ]; then
+		age=$((now - file_age))
+		[ "$age" -gt "$XTRA_MAX_AGE_SECONDS" ] && return 0
+	fi
+
+	return 1
+}
+
+# Download XTRA data from Qualcomm's servers.
+# Tries all 3 mirrors in sequence.
+download_xtra() {
+	if ! xtra_needs_refresh; then
+		log "XTRA cache is fresh, skipping download"
+		return 0
+	fi
+
+	mkdir -p "$CACHE_DIR"
+
+	for url in $XTRA_URLS; do
+		log "Downloading XTRA data from ${url}..."
+		if wget -q -O "$XTRA_TMP" "$url" 2>/dev/null; then
+			# Sanity check: XTRA files are typically 30-100KB
+			size=$(wc -c < "$XTRA_TMP" 2>/dev/null)
+			if [ -n "$size" ] && [ "$size" -gt 1024 ] && [ "$size" -lt 1048576 ]; then
+				mv "$XTRA_TMP" "$XTRA_CACHE"
+				log "XTRA data downloaded (${size} bytes)"
+				return 0
+			else
+				log "XTRA download from ${url} has unexpected size: ${size}"
+				rm -f "$XTRA_TMP"
+			fi
+		else
+			log "Failed to download from ${url}"
+			rm -f "$XTRA_TMP"
+		fi
+	done
+
+	# Fall back to stale cache if available
+	if [ -f "$XTRA_CACHE" ]; then
+		log "All mirrors failed, using stale cache"
+		return 0
+	fi
+
+	log "All XTRA mirrors failed and no cache available"
+	return 1
+}
+
+# Ensure the QMI LOC engine is unlocked.
+# Qualcomm modems (MSM8974, SDM845, EG25-G) often start with the
+# location engine locked to QMI_LOC_LOCK_TYPE_ALL, which blocks all
+# LOC operations including XTRA injection. ModemManager >= 1.25.95
+# handles this automatically; this is a fallback for older versions.
+# Must be called with ModemManager stopped (direct QMI device access).
+unlock_loc_engine() {
+	if [ ! -e "/dev/wwan0qmi0" ]; then
+		return 1
+	fi
+
+	# Check if engine is already unlocked (with a short timeout)
+	lock_state=$(qmicli -d /dev/wwan0qmi0 --loc-get-engine-lock 2>&1)
+	case "$lock_state" in
+		*"none"*)
+			log "LOC engine already unlocked"
+			return 0
+			;;
+	esac
+
+	log "Unlocking QMI LOC engine..."
+	if qmicli -d /dev/wwan0qmi0 --loc-set-engine-lock=none 2>/dev/null; then
+		log "LOC engine unlocked successfully"
+		return 0
+	fi
+
+	log "WARNING: Could not unlock LOC engine"
+	return 1
+}
+
+# Inject XTRA data into the modem via ModemManager.
+# When modem is in failed state (e.g. no SIM), the QMI LOC service
+# does not respond to XTRA injection — this is a firmware limitation
+# on MSM8974. We detect this and skip gracefully.
+inject_xtra() {
+	if [ ! -f "$XTRA_CACHE" ]; then
+		log "No XTRA data to inject"
+		return 1
+	fi
+
+	if ! wait_for_modem_manager; then
+		log "Cannot inject XTRA: no modem available"
+		return 1
+	fi
+
+	if ! modem_is_functional; then
+		log "Skipping XTRA injection: modem not functional (no SIM?)"
+		log "XTRA data is cached and will be injected when modem becomes available"
+		return 1
+	fi
+
+	# Enable GPS sources first — injection may require active GPS session
+	log "Enabling GPS location sources..."
+	mmcli -m "$MODEM_INDEX" --location-enable-gps-raw --location-enable-gps-nmea 2>/dev/null
+	sleep 1
+
+	log "Injecting XTRA data into modem..."
+	if mmcli -m "$MODEM_INDEX" --location-inject-assistance-data="$XTRA_CACHE" 2>/dev/null; then
+		log "XTRA data injected successfully"
+		return 0
+	fi
+
+	# Injection failed — try unlocking engine and retrying.
+	# This requires stopping MM temporarily for direct QMI access.
+	log "XTRA injection failed, attempting engine unlock workaround..."
+	/etc/init.d/S41modem-manager stop 2>/dev/null
+	sleep 2
+
+	unlock_loc_engine
+
+	/etc/init.d/S41modem-manager start 2>/dev/null
+
+	# Wait for modem to reappear after MM restart
+	MODEM_INDEX=""
+	if ! wait_for_modem_manager; then
+		log "Modem did not reappear after MM restart"
+		return 1
+	fi
+
+	# Re-enable GPS and retry injection
+	mmcli -m "$MODEM_INDEX" --location-enable-gps-raw --location-enable-gps-nmea 2>/dev/null
+	sleep 1
+
+	if mmcli -m "$MODEM_INDEX" --location-inject-assistance-data="$XTRA_CACHE" 2>/dev/null; then
+		log "XTRA data injected successfully (after engine unlock)"
+		return 0
+	fi
+
+	log "XTRA injection failed even after engine unlock"
+	return 1
+}
+
+# Enable GPS tracking via ModemManager.
+# This works even when the modem is in failed state (no SIM).
+enable_gps() {
+	if ! wait_for_modem_manager; then
+		log "Cannot enable GPS: no modem available"
+		return 1
+	fi
+
+	log "Enabling GPS location sources..."
+	if mmcli -m "$MODEM_INDEX" --location-enable-gps-raw --location-enable-gps-nmea 2>/dev/null; then
+		log "GPS enabled"
+		return 0
+	fi
+
+	log "Failed to enable GPS"
+	return 1
+}
+
+# Show current GPS/location status from ModemManager.
+show_status() {
+	if ! wait_for_modem_manager; then
+		echo "No modem found"
+		return 1
+	fi
+
+	echo "=== ModemManager Location Status ==="
+	mmcli -m "$MODEM_INDEX" --location-status 2>/dev/null
+
+	echo ""
+	echo "=== Modem State ==="
+	mmcli -m "$MODEM_INDEX" 2>/dev/null | grep -E "state|failed"
+
+	echo ""
+	echo "=== GPS NMEA Output ==="
+	mmcli -m "$MODEM_INDEX" --location-get 2>/dev/null | head -20
+
+	echo ""
+	echo "=== XTRA Cache ==="
+	if [ -f "$XTRA_CACHE" ]; then
+		size=$(wc -c < "$XTRA_CACHE" 2>/dev/null)
+		mtime=$(ls -l "$XTRA_CACHE" 2>/dev/null | awk '{print $6, $7, $8}')
+		echo "  File: ${XTRA_CACHE}"
+		echo "  Size: ${size} bytes"
+		echo "  Modified: ${mtime}"
+
+		if xtra_needs_refresh; then
+			echo "  Status: STALE (needs refresh)"
+		else
+			echo "  Status: FRESH"
+		fi
+	else
+		echo "  No cached XTRA data"
+	fi
+}
+
+# Main injection sequence: enable GPS + download XTRA + inject.
+do_inject() {
+	log "Starting GPS assistance data injection"
+
+	# Always enable GPS — this works even without SIM
+	enable_gps
+
+	# Download XTRA if we have internet
+	download_xtra
+
+	# Inject XTRA — will skip gracefully if modem is in failed state
+	inject_xtra
+
+	log "GPS assistance data injection complete"
+}
+
+# Refresh: re-download XTRA if stale, then re-inject.
+do_refresh() {
+	log "Refreshing GPS assistance data"
+
+	download_xtra
+	if [ -f "$XTRA_CACHE" ]; then
+		inject_xtra
+	fi
+
+	log "GPS assistance data refresh complete"
+}
+
+case "$1" in
+	inject)
+		do_inject
+		;;
+	refresh)
+		do_refresh
+		;;
+	status)
+		show_status
+		;;
+	*)
+		echo "Usage: $0 {inject|refresh|status}"
+		exit 1
+		;;
+esac

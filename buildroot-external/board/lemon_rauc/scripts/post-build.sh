@@ -25,3 +25,5 @@ mkdir -p "${TARGET_DIR}/mnt/rauc/slot-a"
 mkdir -p "${TARGET_DIR}/mnt/rauc/slot-b"
 
 echo "=== Post-build configuration complete ==="
+
+date +%s > "${TARGET_DIR}/etc/build-timestamp"
