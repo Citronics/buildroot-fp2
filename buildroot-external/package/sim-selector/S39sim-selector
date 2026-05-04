@@ -20,9 +20,8 @@ start() {
   do
     if [ -e "/dev/wwan0qmi0" ]
     then
-      # Using --device-open-qmi flag as we may have libqmi
-      # version that can't automatically detect the type yet.
-      QMICLI_MODEM="qmicli --silent -d /dev/wwan0qmi0 --device-open-qmi"
+      # Using --device-open-proxy to share the QMI port with ModemManager.
+      QMICLI_MODEM="qmicli --silent -d /dev/wwan0qmi0 --device-open-proxy"
       echo "Using /dev/wwan0qmi0"
     # Check if QRTR is available for new devices.
     elif qmicli --silent -pd qrtr://0 --uim-noop > /dev/null
