@@ -1,0 +1,6 @@
+config BR2_PACKAGE_MODEM_BOOT
+	bool "modem-boot"
+	help
+	  Init script to boot the modem remoteproc after the ADSP and
+	  SLIMbus audio are fully initialized. Prevents the ADSP crash
+	  that occurs when the modem boots too soon after the ADSP.

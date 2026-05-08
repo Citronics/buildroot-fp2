@@ -1,0 +1,3 @@
+#ifndef _WCD9320_REGISTERS_H
+#define _WCD9320_REGISTERS_H
+#endif

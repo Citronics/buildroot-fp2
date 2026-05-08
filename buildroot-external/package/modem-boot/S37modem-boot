@@ -1,0 +1,101 @@
+#!/bin/sh
+#
+# S37modem-boot - Start the modem remoteproc after ADSP is stable
+#
+# The modem boot triggers an ADSP crash if started before the ADSP has
+# fully initialized its SLIMbus and audio services. On downstream
+# (LineageOS), the ADSP boots ~2.8s before the modem, and boot_adsp
+# is explicitly gated. On mainline, rmtfs previously started the modem
+# via the -s flag immediately after the ADSP, leaving only ~0.6s gap
+# which reliably crashed the ADSP.
+#
+# This script waits for the sound card (which requires ADSP + SLIMbus
+# + codec enumeration) before starting the modem remoteproc. This
+# ensures a sufficient gap, matching the downstream boot ordering.
+#
+# Dependencies:
+#   S35adsp-boot - ADSP must be booted first
+#
+
+MODEM_RPROC=""
+
+find_modem_rproc() {
+	for rproc in /sys/class/remoteproc/remoteproc*; do
+		[ -d "$rproc" ] || continue
+		# Check modalias for MSS/MPSS
+		modalias=$(cat "$rproc/device/modalias" 2>/dev/null)
+		case "$modalias" in
+			*-mss-pil*|*-mpss-pas*)
+				MODEM_RPROC="$rproc"
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+start() {
+	printf 'Starting modem: '
+
+	if ! find_modem_rproc; then
+		echo "SKIP (modem remoteproc not found)"
+		return 0
+	fi
+
+	# Check if already running
+	state=$(cat "$MODEM_RPROC/state" 2>/dev/null)
+	if [ "$state" = "running" ]; then
+		echo "OK (already running)"
+		return 0
+	fi
+
+	# Wait for the sound card — proves ADSP + SLIMbus are fully up
+	local attempts=0
+	while [ $attempts -lt 30 ]; do
+		if [ -e /proc/asound/cards ] && grep -q "F3" /proc/asound/cards 2>/dev/null; then
+			break
+		fi
+		attempts=$((attempts + 1))
+		sleep 1
+	done
+
+	if [ $attempts -ge 30 ]; then
+		echo "WARN (sound card not ready, starting modem anyway)"
+	fi
+
+	echo start > "$MODEM_RPROC/state" 2>/dev/null
+	ret=$?
+
+	if [ $ret -eq 0 ]; then
+		echo "OK (after ${attempts}s wait)"
+	else
+		echo "FAIL"
+	fi
+
+	return $ret
+}
+
+stop() {
+	printf 'Stopping modem: '
+
+	if ! find_modem_rproc; then
+		echo "OK (not found)"
+		return 0
+	fi
+
+	state=$(cat "$MODEM_RPROC/state" 2>/dev/null)
+	if [ "$state" != "running" ]; then
+		echo "OK (not running)"
+		return 0
+	fi
+
+	echo stop > "$MODEM_RPROC/state" 2>/dev/null
+	echo "OK"
+}
+
+case "$1" in
+	start) start;;
+	stop) stop;;
+	restart) stop; start;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1;;
+esac

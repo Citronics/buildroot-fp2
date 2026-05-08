@@ -1,0 +1,6 @@
+config BR2_PACKAGE_ACDB_LOADER
+	bool "acdb-loader"
+	help
+	  Qualcomm ACDB (Audio Calibration Database) loader.
+	  Loads audio calibration data from .acdb files and sends
+	  it to the ADSP via the kernel audio calibration interface.
