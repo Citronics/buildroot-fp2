@@ -27,6 +27,11 @@ thermal_cleanup() {
     for _pid in $STRESS_PIDS; do
         kill "$_pid" 2>/dev/null
     done
+    # Clear any emulated temperature we injected, so an interrupted run never
+    # leaves the CPU permanently throttled until reboot.
+    for _ez in "${THERMAL_BASE}"/thermal_zone*/emul_temp; do
+        [ -e "$_ez" ] && echo 0 > "$_ez" 2>/dev/null
+    done
     # Restore original governors for CPUs 0-3
     _cpu=0
     for _gov in $ORIG_GOVS; do
@@ -130,6 +135,9 @@ _PLAN=$(( _PLAN + 3 ))
 
 # dmesg: 1
 _PLAN=$(( _PLAN + 1 ))
+
+# Emulated trip-point throttle + recovery: 2 (SKIP if emul_temp unavailable)
+_PLAN=$(( _PLAN + 2 ))
 
 # ---------------------------------------------------------------------------
 # Output TAP header
@@ -548,6 +556,80 @@ else
     else
         tap_not_ok "heavy thermal stress: frequency returned to normal range" \
             "cur_freq unreadable or zero (freq=${_cur_freq_after}, gov=${_cur_gov_after})"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# == EMULATED TRIP-POINT THROTTLE TEST ==
+# Deterministic check of the temperature -> cpufreq-cooling throttle path
+# using CONFIG_THERMAL_EMULATION. Inject a temperature above the passive
+# trip into every CPU zone and require scaling_max_freq to drop (cooling
+# engaged), then clear the emulation and require it to recover. This proves
+# the threshold mechanism regardless of ambient temperature.
+# ---------------------------------------------------------------------------
+_first_cpu_zone=$(echo "$CPU_ZONES" | awk '{print $1}')
+_emul_path="${THERMAL_BASE}/thermal_zone${_first_cpu_zone}/emul_temp"
+
+if [ -z "$_first_cpu_zone" ] || [ ! -e "$_emul_path" ]; then
+    tap_ok "emulated trip-point throttling caps cpufreq" \
+        "emul_temp unavailable (CONFIG_THERMAL_EMULATION not enabled)"
+    tap_ok "cpufreq recovers after emulated temperature cleared" \
+        "emul_temp unavailable (CONFIG_THERMAL_EMULATION not enabled)"
+else
+    _base_max=$(cat "${CPUFREQ_BASE}/cpu0/cpufreq/scaling_max_freq" 2>/dev/null)
+    _trip0=$(cat "${THERMAL_BASE}/thermal_zone${_first_cpu_zone}/trip_point_0_temp" 2>/dev/null)
+    [ -z "$_trip0" ] && _trip0=60000
+    _inject=$(( _trip0 + 10000 ))
+    printf "# emul: baseline max_freq=%s kHz, passive trip=%s mC, injecting %s mC\n" \
+        "$_base_max" "$_trip0" "$_inject"
+
+    for _zi in $CPU_ZONES; do
+        echo "$_inject" > "${THERMAL_BASE}/thermal_zone${_zi}/emul_temp" 2>/dev/null
+    done
+
+    _throttled=0
+    _p=0
+    _now_max="$_base_max"
+    while [ "$_p" -lt 12 ] && [ "$_throttled" -eq 0 ]; do
+        sleep 1
+        _p=$(( _p + 1 ))
+        _now_max=$(cat "${CPUFREQ_BASE}/cpu0/cpufreq/scaling_max_freq" 2>/dev/null)
+        printf "# emul poll %d: max_freq=%s kHz\n" "$_p" "$_now_max"
+        if [ -n "$_now_max" ] && [ -n "$_base_max" ] && \
+           [ "$_now_max" -lt "$_base_max" ] 2>/dev/null; then
+            _throttled=1
+        fi
+    done
+
+    if [ "$_throttled" -eq 1 ]; then
+        tap_ok "emulated trip-point throttling caps cpufreq (max_freq ${_base_max} -> ${_now_max} kHz)"
+    else
+        tap_not_ok "emulated trip-point throttling caps cpufreq" \
+            "scaling_max_freq stayed at ${_now_max} kHz after injecting ${_inject} mC (baseline ${_base_max})"
+    fi
+
+    for _zi in $CPU_ZONES; do
+        echo 0 > "${THERMAL_BASE}/thermal_zone${_zi}/emul_temp" 2>/dev/null
+    done
+
+    _recovered=0
+    _p=0
+    while [ "$_p" -lt 12 ] && [ "$_recovered" -eq 0 ]; do
+        sleep 1
+        _p=$(( _p + 1 ))
+        _now_max=$(cat "${CPUFREQ_BASE}/cpu0/cpufreq/scaling_max_freq" 2>/dev/null)
+        if [ -n "$_now_max" ] && [ -n "$_base_max" ] && \
+           [ "$_now_max" -ge "$_base_max" ] 2>/dev/null; then
+            _recovered=1
+        fi
+    done
+    printf "# emul recovery: max_freq=%s kHz (baseline %s)\n" "$_now_max" "$_base_max"
+
+    if [ "$_recovered" -eq 1 ]; then
+        tap_ok "cpufreq recovers after emulated temperature cleared (max_freq=${_now_max} kHz)"
+    else
+        tap_not_ok "cpufreq recovers after emulated temperature cleared" \
+            "scaling_max_freq stuck at ${_now_max} kHz (baseline ${_base_max})"
     fi
 fi
 

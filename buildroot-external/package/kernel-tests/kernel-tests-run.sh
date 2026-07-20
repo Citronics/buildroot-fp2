@@ -15,10 +15,10 @@ runner_cleanup() {
 trap runner_cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# TAP header (wraps 3 sub-tests)
+# TAP header (wraps 4 sub-tests)
 # ---------------------------------------------------------------------------
 printf "TAP version 13\n"
-printf "1..3\n"
+printf "1..4\n"
 
 # ---------------------------------------------------------------------------
 # Print device/kernel info header
@@ -38,6 +38,7 @@ TOTAL_SKIP=0
 DVFS_PASS=0;  DVFS_FAIL=0;  DVFS_SKIP=0
 THERM_PASS=0; THERM_FAIL=0; THERM_SKIP=0
 IOMMU_PASS=0; IOMMU_FAIL=0; IOMMU_SKIP=0
+VOLT_PASS=0;  VOLT_FAIL=0;  VOLT_SKIP=0
 
 run_test() {
     _name="$1"
@@ -82,13 +83,18 @@ run_test() {
     fi
 }
 
+# Voltage runs right after DVFS, before the thermal stress test heats the
+# SoC — the rail reads cleanest on a cool, unthrottled device.
 run_test "kernel-test-dvfs" 1
 DVFS_PASS=$_pass; DVFS_FAIL=$_fail; DVFS_SKIP=$_skip
 
-run_test "kernel-test-thermal" 2
+run_test "kernel-test-voltage" 2
+VOLT_PASS=$_pass; VOLT_FAIL=$_fail; VOLT_SKIP=$_skip
+
+run_test "kernel-test-thermal" 3
 THERM_PASS=$_pass; THERM_FAIL=$_fail; THERM_SKIP=$_skip
 
-run_test "kernel-test-iommu" 3
+run_test "kernel-test-iommu" 4
 IOMMU_PASS=$_pass; IOMMU_FAIL=$_fail; IOMMU_SKIP=$_skip
 
 # ---------------------------------------------------------------------------
@@ -99,6 +105,7 @@ printf "=== Kernel Test Results ===\n"
 printf "%-12s %d pass, %d fail, %d skip\n" "DVFS:"    "$DVFS_PASS"  "$DVFS_FAIL"  "$DVFS_SKIP"
 printf "%-12s %d pass, %d fail, %d skip\n" "Thermal:"  "$THERM_PASS" "$THERM_FAIL" "$THERM_SKIP"
 printf "%-12s %d pass, %d fail, %d skip\n" "IOMMU:"   "$IOMMU_PASS" "$IOMMU_FAIL" "$IOMMU_SKIP"
+printf "%-12s %d pass, %d fail, %d skip\n" "Voltage:" "$VOLT_PASS"  "$VOLT_FAIL"  "$VOLT_SKIP"
 printf -- "---\n"
 printf "%-12s %d pass, %d fail, %d skip\n" \
     "TOTAL:" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP"

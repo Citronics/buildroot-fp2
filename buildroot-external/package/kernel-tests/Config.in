@@ -3,5 +3,6 @@ config BR2_PACKAGE_KERNEL_TESTS
 	help
 	  Test scripts for verifying kernel features on the
 	  Fairphone 2: CPU DVFS frequency scaling, thermal
-	  management, and IOMMU operation. Outputs results
-	  in TAP v13 format.
+	  management (including emulated trip-point throttling),
+	  IOMMU operation, and SPM gang-rail voltage tracking.
+	  Outputs results in TAP v13 format.
