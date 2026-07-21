@@ -81,12 +81,15 @@ fi
 
 # ---------------------------------------------------------------------------
 # 4. drm/msm bound the GPU (and did NOT fail to bind)
+#    Component path prints "bound <dev>"; the native GPU-only path
+#    (msm_gpu_probe via amd,imageon, v6.18+) prints "Initialized msm ... for <dev>".
 # ---------------------------------------------------------------------------
-if scan "bound $GPU_DEV" >/dev/null && ! scan "failed to bind $GPU_DEV" >/dev/null; then
+if { scan "bound $GPU_DEV" >/dev/null || scan "Initialized msm .* for $GPU_DEV" >/dev/null; } \
+   && ! scan "failed to bind $GPU_DEV" >/dev/null; then
     tap_ok "drm/msm bound $GPU_DEV"
 else
     _why=$(scan "failed to bind $GPU_DEV|failed to load adreno|adev bind failed" | head -n1)
-    tap_not_ok "drm/msm bound $GPU_DEV" "${_why:-no 'bound $GPU_DEV' message in dmesg}"
+    tap_not_ok "drm/msm bound $GPU_DEV" "${_why:-no 'bound $GPU_DEV' or 'Initialized msm' message in dmesg}"
 fi
 
 # ---------------------------------------------------------------------------
