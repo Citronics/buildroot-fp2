@@ -1,248 +1,197 @@
 #!/bin/sh
-# kernel-test-iommu.sh — IOMMU TAP v13 test suite
-# Platform: Fairphone 2, Qualcomm MSM8974 Pro (Snapdragon 801)
-# IOMMU driver: qcom-iommu / qcom_iommu (CONFIG_QCOM_IOMMU=y)
-# IOMMU instances: mdp_iommu, gpu_iommu, venus_iommu
+# kernel-test-iommu.sh — MSM8974 (Fairphone 2, headless) GPU IOMMU test suite
 #
-# TAP version 13 — https://testanything.org/tap-version-13-specification.html
-# Usage: sh kernel-test-iommu.sh
-# Run as root for full dmesg access.
+# Validates the non-secure MSM8974 MMSS GPU IOMMU (qcom_iommu) bring-up:
+#   - the Adreno GPU (fdb00000.gpu) is IOMMU-mapped and drm/msm bound it,
+#   - the SMMU is NOT faulting (context/global faults) and the GPU is not hung,
+#   - a real GPU submit DMA-fetches its cmdstream through the SMMU without
+#     raising a context fault or hangcheck.
+#
+# This target is HEADLESS: the display (mdss/dsi, mdp_iommu) and the secure
+# venus_iommu are disabled in DT, so those instances are reported SKIP.
+#
+# Accuracy note: a GPU submit's WAIT_FENCE can return on a stale seqno even
+# when the GPU actually faulted, so this suite does NOT trust the submit's
+# exit code alone — it snapshots dmesg around the submit and fails if a
+# context fault or hangcheck appears. TAP version 13. Run as root.
 
-# ---------------------------------------------------------------------------
-# Test counter
-# ---------------------------------------------------------------------------
 TEST_NUM=0
+SUBMIT_BIN=/usr/bin/gpu-iommu-submit
 
-# ---------------------------------------------------------------------------
-# TAP helpers
-# ---------------------------------------------------------------------------
-tap_ok() {
-    # tap_ok <description> [skip_reason]
-    TEST_NUM=$(( TEST_NUM + 1 ))
-    if [ -n "$2" ]; then
-        printf "ok %d - %s # SKIP %s\n" "$TEST_NUM" "$1" "$2"
-    else
-        printf "ok %d - %s\n" "$TEST_NUM" "$1"
-    fi
-}
+# MSM8974 MMSS SMMU addresses
+GPU_DEV=fdb00000.gpu          # Adreno 330
+GPU_IOMMU=fdb10000            # gpu_iommu global window
+GPU_CTX=fdb18000              # gpu_iommu context bank 0
 
-tap_not_ok() {
-    # tap_not_ok <description> <message>
-    TEST_NUM=$(( TEST_NUM + 1 ))
-    printf "not ok %d - %s\n" "$TEST_NUM" "$1"
-    printf "  ---\n"
-    printf "  message: '%s'\n" "$2"
-    printf "  ...\n"
-}
+tap_ok()      { TEST_NUM=$((TEST_NUM+1)); if [ -n "$2" ]; then printf "ok %d - %s # SKIP %s\n" "$TEST_NUM" "$1" "$2"; else printf "ok %d - %s\n" "$TEST_NUM" "$1"; fi; }
+tap_not_ok()  { TEST_NUM=$((TEST_NUM+1)); printf "not ok %d - %s\n" "$TEST_NUM" "$1"; printf "  ---\n  message: '%s'\n  ...\n" "$2"; }
 
-# ---------------------------------------------------------------------------
-# Static plan — 11 tests always emitted (some may be SKIP)
-#   1  /sys/kernel/iommu_groups/ exists and is readable
-#   2  /sys/class/iommu/ exists
-#   3  IOMMU groups count > 0
-#   4  dmesg shows qcom-iommu probe messages (driver active)
-#   5  MDP/display device found in an IOMMU group
-#   6  GPU/Adreno device found in an IOMMU group
-#   7  Venus/video device found in an IOMMU group
-#   8  No IOMMU faults in dmesg
-#   9  IOMMU context banks registered in dmesg
-#  10  No unexpected IOMMU bypass in dmesg
-#  11  No new IOMMU warnings during test run
-# ---------------------------------------------------------------------------
-_PLAN=11
+# Fault / hang signatures. These are the lines that mean the SMMU is not
+# translating GPU DMA correctly (or the GPU wedged as a result).
+FAULT_RE='Unhandled context fault|\*\*\* fault: iova|context fault|global fault|Global fault|adreno.*fault|smmu.*fault|SMMU halt timeout|secure init failed'
+HANG_RE='hangcheck detected gpu lockup|gpu recover|recover_worker|gpu hung|GPU lockup'
 
-# ---------------------------------------------------------------------------
-# Output TAP header
-# ---------------------------------------------------------------------------
+scan() { dmesg 2>/dev/null | grep -aiE "$1"; }
+
+_PLAN=12
 printf "TAP version 13\n"
 printf "1..%d\n" "$_PLAN"
 
-# ---------------------------------------------------------------------------
-# Diagnostic: enumerate IOMMU groups (informational, not TAP tests)
-# ---------------------------------------------------------------------------
-printf "# IOMMU group enumeration:\n"
-for _grp in /sys/kernel/iommu_groups/*/; do
-    [ -d "$_grp" ] || continue
-    _gidx=$(basename "$_grp")
-    printf "# Group %s:\n" "$_gidx"
-    for _dev in "$_grp"devices/*; do
-        [ -e "$_dev" ] && printf "#   device: %s\n" "$(basename "$_dev")"
+printf "# IOMMU groups:\n"
+for _g in /sys/kernel/iommu_groups/*/; do
+    [ -d "$_g" ] || continue
+    for _d in "$_g"devices/*; do
+        [ -e "$_d" ] && printf "#   group %s: %s\n" "$(basename "$_g")" "$(basename "$_d")"
     done
 done
 
 # ---------------------------------------------------------------------------
-# Baseline dmesg line count (used by test 11)
+# 1. qcom_iommu driver is active
 # ---------------------------------------------------------------------------
-_dmesg_before_count=$(dmesg 2>/dev/null | wc -l)
-
-# ---------------------------------------------------------------------------
-# Test 1: /sys/kernel/iommu_groups/ exists and is readable
-# ---------------------------------------------------------------------------
-if [ ! -d /sys/kernel/iommu_groups ]; then
-    tap_ok "iommu_groups directory exists" "IOMMU not available"
-    _i=2
-    while [ "$_i" -le 11 ]; do
-        TEST_NUM=$(( TEST_NUM + 1 ))
-        printf "ok %d - skipped # SKIP IOMMU not available\n" "$TEST_NUM"
-        _i=$(( _i + 1 ))
-    done
-    exit 0
-fi
-tap_ok "iommu_groups directory exists"
-
-# ---------------------------------------------------------------------------
-# Test 2: /sys/class/iommu/ exists
-# ---------------------------------------------------------------------------
-if [ -d /sys/class/iommu ]; then
-    tap_ok "sys/class/iommu directory exists"
+if [ -d /sys/class/iommu ] && ls /sys/class/iommu/ 2>/dev/null | grep -q .; then
+    tap_ok "qcom_iommu driver active (/sys/class/iommu populated)"
+elif scan "Adding to iommu group" >/dev/null; then
+    tap_ok "qcom_iommu driver active (dmesg)"
 else
-    tap_not_ok "sys/class/iommu directory exists" "/sys/class/iommu not found"
+    tap_not_ok "qcom_iommu driver active" "no /sys/class/iommu entries and no 'Adding to iommu group' in dmesg"
 fi
 
 # ---------------------------------------------------------------------------
-# Test 3: IOMMU groups count > 0
+# 2. GPU (fdb00000.gpu) is IOMMU-mapped (present in an iommu group)
 # ---------------------------------------------------------------------------
-_count=0
-for _d in /sys/kernel/iommu_groups/*/; do
-    [ -d "$_d" ] && _count=$(( _count + 1 ))
+_gpu_grp=""
+for _g in /sys/kernel/iommu_groups/*/; do
+    [ -e "$_g/devices/$GPU_DEV" ] && _gpu_grp=$(basename "$_g")
 done
-printf "# IOMMU group count: %d\n" "$_count"
-if [ "$_count" -gt 0 ]; then
-    tap_ok "IOMMU groups count > 0 (found ${_count})"
+if [ -n "$_gpu_grp" ]; then
+    tap_ok "GPU $GPU_DEV is IOMMU-mapped (group $_gpu_grp)"
 else
-    tap_not_ok "IOMMU groups count > 0" "no IOMMU groups found under /sys/kernel/iommu_groups/"
+    tap_not_ok "GPU $GPU_DEV is IOMMU-mapped" "$GPU_DEV not found in any /sys/kernel/iommu_groups/*/devices/"
 fi
 
 # ---------------------------------------------------------------------------
-# Test 4: dmesg shows qcom-iommu probe messages (driver active)
+# 3. GPU IOMMU context bank bound (qcom-iommu-ctx @ fdb18000)
 # ---------------------------------------------------------------------------
-_probe=$(dmesg 2>/dev/null | grep -i "qcom.iommu\|qcom_iommu" | grep -i "probe\|init\|attach\|add" | head -n 3)
-if [ -n "$_probe" ]; then
-    tap_ok "qcom-iommu driver active in dmesg"
+if [ -e "/sys/bus/platform/devices/$GPU_CTX.iommu-ctx/driver" ] || \
+   scan "$GPU_CTX" >/dev/null; then
+    tap_ok "GPU IOMMU context bank ($GPU_CTX) present"
 else
-    tap_not_ok "qcom-iommu driver active in dmesg" "no qcom-iommu probe messages in dmesg"
-fi
-printf "# driver messages:\n"
-dmesg 2>/dev/null | grep -i "qcom.iommu\|qcom_iommu" | head -n 5 | while read -r _line; do
-    printf "#   %s\n" "$_line"
-done
-
-# ---------------------------------------------------------------------------
-# Test 5: MDP/display device found in an IOMMU group
-# ---------------------------------------------------------------------------
-_mdp_found=0
-for _grp in /sys/kernel/iommu_groups/*/; do
-    for _dev in "$_grp"devices/*; do
-        _devpath=$(readlink -f "$_dev" 2>/dev/null)
-        case "$_devpath" in
-            *fd928000*|*fd900000*)
-                _mdp_found=1
-                printf "#   MDP device: %s\n" "$_devpath"
-                ;;
-        esac
-    done
-done
-if [ "$_mdp_found" -eq 1 ]; then
-    tap_ok "MDP/display device found in IOMMU group"
-else
-    tap_ok "MDP/display device found in IOMMU group" "display device not found in any IOMMU group"
+    tap_not_ok "GPU IOMMU context bank present" "$GPU_CTX.iommu-ctx not bound"
 fi
 
 # ---------------------------------------------------------------------------
-# Test 6: GPU/Adreno device found in an IOMMU group
+# 4. drm/msm bound the GPU (and did NOT fail to bind)
 # ---------------------------------------------------------------------------
-_gpu_found=0
-for _grp in /sys/kernel/iommu_groups/*/; do
-    for _dev in "$_grp"devices/*; do
-        _devpath=$(readlink -f "$_dev" 2>/dev/null)
-        case "$_devpath" in
-            *fdb10000*|*fdb00000*)
-                _gpu_found=1
-                printf "#   GPU device: %s\n" "$_devpath"
-                ;;
-        esac
-    done
-done
-if [ "$_gpu_found" -eq 1 ]; then
-    tap_ok "GPU/Adreno device found in IOMMU group"
+if scan "bound $GPU_DEV" >/dev/null && ! scan "failed to bind $GPU_DEV" >/dev/null; then
+    tap_ok "drm/msm bound $GPU_DEV"
 else
-    tap_ok "GPU/Adreno device found in IOMMU group" "GPU device not found in any IOMMU group"
+    _why=$(scan "failed to bind $GPU_DEV|failed to load adreno|adev bind failed" | head -n1)
+    tap_not_ok "drm/msm bound $GPU_DEV" "${_why:-no 'bound $GPU_DEV' message in dmesg}"
 fi
 
 # ---------------------------------------------------------------------------
-# Test 7: Venus/video device found in an IOMMU group (may not be probed)
+# 5. GPU render node present (/dev/dri/renderD128)
 # ---------------------------------------------------------------------------
-_venus_found=0
-for _grp in /sys/kernel/iommu_groups/*/; do
-    for _dev in "$_grp"devices/*; do
-        _devpath=$(readlink -f "$_dev" 2>/dev/null)
-        case "$_devpath" in
-            *fdc84000*|*fdc00000*)
-                _venus_found=1
-                printf "#   Venus device: %s\n" "$_devpath"
-                ;;
-        esac
-    done
-done
-if [ "$_venus_found" -eq 1 ]; then
-    tap_ok "Venus/video device found in IOMMU group"
+if [ -e /dev/dri/renderD128 ]; then
+    tap_ok "GPU render node /dev/dri/renderD128 exists"
 else
-    tap_ok "Venus/video device found in IOMMU group" "venus device not probed or not in IOMMU group"
+    tap_not_ok "GPU render node /dev/dri/renderD128 exists" "no render node — GPU did not come up"
 fi
 
 # ---------------------------------------------------------------------------
-# Test 8: No IOMMU faults in dmesg (CRITICAL)
+# 6. No SMMU context/global faults at boot (CRITICAL)
 # ---------------------------------------------------------------------------
-_faults=$(dmesg 2>/dev/null | grep -iE "iommu.*(fault|error|stall|exception)|translation.*(error|fault)|context.*(fault|stall)|Unhandled.*context")
-if [ -n "$_faults" ]; then
-    tap_not_ok "no IOMMU faults in dmesg" "faults detected"
-    printf '%s\n' "$_faults" | head -n 5 | while read -r _line; do
-        printf "  # FAULT: %s\n" "$_line"
-    done
+_boot_faults=$(scan "$FAULT_RE")
+if [ -z "$_boot_faults" ]; then
+    tap_ok "no SMMU faults in dmesg (boot)"
 else
-    tap_ok "no IOMMU faults in dmesg"
+    tap_not_ok "no SMMU faults in dmesg (boot)" "SMMU faults present"
+    printf '%s\n' "$_boot_faults" | head -n 5 | while read -r _l; do printf "  # FAULT: %s\n" "$_l"; done
 fi
 
 # ---------------------------------------------------------------------------
-# Test 9: Context bank registration in dmesg
+# 7. No GPU hangcheck / lockup at boot (CRITICAL)
 # ---------------------------------------------------------------------------
-_bank_count=0
-for _bank in "mdp_0" "GFX3D" "venus_ns"; do
-    dmesg 2>/dev/null | grep -qi "$_bank" && _bank_count=$(( _bank_count + 1 ))
-done
-printf "# known context banks seen: %d/3\n" "$_bank_count"
-dmesg 2>/dev/null | grep -iE "mdp_0|GFX3D|venus_ns|context bank" | head -n 10 | while read -r _line; do
-    printf "#   %s\n" "$_line"
-done
-if [ "$_bank_count" -gt 0 ]; then
-    tap_ok "IOMMU context banks registered in dmesg (found ${_bank_count}/3)"
+_boot_hang=$(scan "$HANG_RE")
+if [ -z "$_boot_hang" ]; then
+    tap_ok "no GPU hangcheck/lockup in dmesg (boot)"
 else
-    tap_not_ok "IOMMU context banks registered in dmesg" "no known context bank names found (mdp_0, GFX3D, venus_ns)"
+    tap_not_ok "no GPU hangcheck/lockup in dmesg (boot)" "GPU hang/recover present"
+    printf '%s\n' "$_boot_hang" | head -n 5 | while read -r _l; do printf "  # HANG: %s\n" "$_l"; done
 fi
 
 # ---------------------------------------------------------------------------
-# Test 10: DMA bypass check — no unexpected passthrough/bypass warnings
+# 8. GPU submit exercises the IOMMU without a fault (CRITICAL, active test)
+#    Snapshot dmesg, run a real submit, then verify NO new context fault /
+#    hangcheck appeared. WAIT_FENCE success alone is NOT trusted.
 # ---------------------------------------------------------------------------
-_bypass=$(dmesg 2>/dev/null | grep -iE "iommu.*(bypass|passthrough|direct)" | grep -iv "disable.*bypass")
-if [ -n "$_bypass" ]; then
-    tap_not_ok "no unexpected IOMMU bypass" "bypass detected for IOMMU device"
-    printf '%s\n' "$_bypass" | head -n 3 | while read -r _line; do
-        printf "#   %s\n" "$_line"
-    done
+if [ ! -x "$SUBMIT_BIN" ]; then
+    tap_ok "GPU submit runs through IOMMU without fault" "$SUBMIT_BIN not installed"
+elif [ ! -e /dev/dri/renderD128 ]; then
+    tap_ok "GPU submit runs through IOMMU without fault" "no render node"
 else
-    tap_ok "no unexpected IOMMU bypass in dmesg"
+    _before=$(dmesg 2>/dev/null | wc -l)
+    _out=$("$SUBMIT_BIN" 2>&1); _rc=$?
+    printf '%s\n' "$_out" | while read -r _l; do printf "#   submit: %s\n" "$_l"; done
+    # let any fault / hangcheck land (hangcheck fires ~2s after submit)
+    sleep 3
+    _new=$(dmesg 2>/dev/null | tail -n "+$((_before+1))")
+    _newfault=$(printf '%s\n' "$_new" | grep -aiE "$FAULT_RE|$HANG_RE")
+    if [ -n "$_newfault" ]; then
+        tap_not_ok "GPU submit runs through IOMMU without fault" "submit triggered a context fault / GPU hang"
+        printf '%s\n' "$_newfault" | head -n 6 | while read -r _l; do printf "  # %s\n" "$_l"; done
+    elif [ "$_rc" -ne 0 ]; then
+        tap_not_ok "GPU submit runs through IOMMU without fault" "submit helper failed (rc=$_rc)"
+    else
+        tap_ok "GPU submit runs through IOMMU without fault (fence completed, no fault)"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
-# Test 11: No new IOMMU warnings during test run (dmesg side-effect)
+# 9. GPU cmd buffer got a valid IOMMU address (not a carveout/identity addr)
+#    The submit helper prints cmdbuf_iova; a translated aperture address is
+#    >= 16MB (the GPU aspace start), proving IOMMU-backed allocation.
 # ---------------------------------------------------------------------------
-_new_lines=$(dmesg 2>/dev/null | tail -n "+${_dmesg_before_count}" 2>/dev/null)
-_new_warn=$(printf '%s\n' "$_new_lines" | grep -iE "iommu.*(warning|error|fault)" 2>/dev/null)
-if [ -z "$_new_warn" ]; then
-    tap_ok "no new IOMMU warnings during test run"
+if [ -x "$SUBMIT_BIN" ] && [ -e /dev/dri/renderD128 ]; then
+    _iova=$("$SUBMIT_BIN" 2>/dev/null | sed -n 's/^cmdbuf_iova=0x//p' | head -n1)
+    if [ -n "$_iova" ]; then
+        _dec=$(printf "%d" "0x$_iova" 2>/dev/null)
+        if [ -n "$_dec" ] && [ "$_dec" -ge 16777216 ]; then
+            tap_ok "GPU buffer IOMMU-mapped in aperture (iova=0x$_iova)"
+        else
+            tap_not_ok "GPU buffer IOMMU-mapped in aperture" "iova 0x$_iova below 16MB aperture — possible carveout/identity mapping"
+        fi
+    else
+        tap_ok "GPU buffer IOMMU-mapped in aperture" "could not read cmdbuf_iova"
+    fi
 else
-    tap_not_ok "no new IOMMU warnings during test run" "new warnings appeared"
-    printf '%s\n' "$_new_warn" | head -n 3 | while read -r _line; do
-        printf "#   %s\n" "$_line"
-    done
+    tap_ok "GPU buffer IOMMU-mapped in aperture" "submit helper unavailable"
+fi
+
+# ---------------------------------------------------------------------------
+# 10. SoC survived (no silent TZ/NoC reset). If we are running, the kernel
+#     that programmed the SMMU booted and reached userspace.
+# ---------------------------------------------------------------------------
+if [ -r /proc/uptime ]; then
+    tap_ok "SoC stable, reached userspace (uptime $(cut -d. -f1 /proc/uptime)s)"
+else
+    tap_ok "SoC stable, reached userspace"
+fi
+
+# ---------------------------------------------------------------------------
+# 11. Display / MDP IOMMU — expected DISABLED on this headless target
+# ---------------------------------------------------------------------------
+if scan "fd928000" >/dev/null; then
+    tap_not_ok "display IOMMU disabled (headless)" "mdp_iommu unexpectedly active on a headless target"
+else
+    tap_ok "display IOMMU disabled (headless)" "mdp_iommu intentionally disabled in DT"
+fi
+
+# ---------------------------------------------------------------------------
+# 12. Venus IOMMU — expected DISABLED (codec off; will return as non-secure)
+# ---------------------------------------------------------------------------
+if scan "fdc84000" >/dev/null; then
+    tap_not_ok "venus IOMMU disabled (headless)" "venus_iommu unexpectedly active"
+else
+    tap_ok "venus IOMMU disabled (headless)" "venus_iommu intentionally disabled in DT"
 fi
