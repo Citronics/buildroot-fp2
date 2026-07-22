@@ -223,9 +223,11 @@ done
 # ---------------------------------------------------------------------------
 # == TRIP POINT VALIDATION (1 per CPU zone) ==
 # ---------------------------------------------------------------------------
-# Reference values from DT (logged only — not hard-coded as assertions)
-_TRIP0_EXPECT=75000
-_TRIP1_EXPECT=110000
+# Reference values from DT (logged only — not hard-coded as assertions).
+# FP2 policy since 6.18: passive 90 C (hyst 10 C), critical 105 C, and the
+# CPU OPP floor is 729.6 MHz (opp entries below it disabled in the DTB).
+_TRIP0_EXPECT=90000
+_TRIP1_EXPECT=105000
 
 for _zi in $CPU_ZONES; do
     _zpath="${THERMAL_BASE}/thermal_zone${_zi}"
