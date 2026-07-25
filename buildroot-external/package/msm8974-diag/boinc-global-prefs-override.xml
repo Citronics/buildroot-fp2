@@ -1,0 +1,30 @@
+<!--
+  Reference BOINC preferences for using real project work as the soak load on
+  this board. Drop in as /var/lib/boinc-client/global_prefs_override.xml
+  (owner boinc:boinc), then `boinccmd --read_global_prefs_override`.
+
+  Without this BOINC never computes here, and the reasons are non-obvious:
+
+    run_on_batteries        the carrier feeds VBAT directly with no battery, so
+                            smbb reports "Discharging" and BOINC's default
+                            "suspend while on batteries" keeps it idle forever
+    suspend_cpu_usage       default is to suspend when non-BOINC CPU load
+                            exceeds 25%, which any stressor trips
+    run_if_user_active      headless board: there is never an active user
+    idle_time_to_run        idle detection is meaningless without input devices
+
+  Also note Science United logs in with the *email address*, not a username:
+    boinccmd --join_acct_mgr https://scienceunited.org/ <email> <password>
+  A wrong identifier returns "no account found" from the account manager.
+-->
+<global_preferences>
+   <run_on_batteries>1</run_on_batteries>
+   <run_if_user_active>1</run_if_user_active>
+   <suspend_if_no_recent_input>0</suspend_if_no_recent_input>
+   <suspend_cpu_usage>0</suspend_cpu_usage>
+   <max_ncpus_pct>100</max_ncpus_pct>
+   <cpu_usage_limit>100</cpu_usage_limit>
+   <idle_time_to_run>0</idle_time_to_run>
+   <start_hour>0</start_hour>
+   <end_hour>0</end_hour>
+</global_preferences>
