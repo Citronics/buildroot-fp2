@@ -1,0 +1,108 @@
+185.35 === start: kernel=6.18.40-citronics-lime-fp2-g59570e2e7e73 ladder=22 rungs (729600..2265600 kHz) HOLD=2700s
+185.46 PMIC previous power-off: pon_reason=0x01 warm_reset=0x0002 poff=0x0002 poff_bits: PS_HOLD verdict=SoC-initiated reset (normal reboot OR TZ/RPM/watchdog path)
+185.47 fresh run: first rung 1036800 kHz (nearest to START=1036800)
+185.47 remoteprocs: all up: remoteproc0=running, remoteproc1=running, remoteproc2=running
+185.49 validating 1036800 kHz (floor 729600) under continuous 4-core load for 2700s
+200.84 rung=1036800 t=15s/2700s cur=1036800 trans=77 tmax=73000 load=2.24
+216.07 rung=1036800 t=30s/2700s cur=1036800 trans=77 tmax=76000 load=2.63
+231.32 rung=1036800 t=45s/2700s cur=1036800 trans=77 tmax=77000 load=2.93
+246.71 rung=1036800 t=60s/2700s cur=1036800 trans=77 tmax=79000 load=3.24
+262.37 rung=1036800 t=76s/2700s cur=1036800 trans=77 tmax=81000 load=3.41
+277.74 rung=1036800 t=91s/2700s cur=1036800 trans=77 tmax=84000 load=3.77
+292.94 rung=1036800 t=107s/2700s cur=1036800 trans=77 tmax=84000 load=3.82
+308.17 rung=1036800 t=122s/2700s cur=1036800 trans=77 tmax=85000 load=4.07
+323.28 thermal 87000 mC: load suspended (frequency untouched)
+323.30 rung=1036800 t=137s/2700s cur=1036800 trans=77 tmax=87000 load=4.06
+338.40 thermal 73000 mC: load resumed
+338.42 rung=1036800 t=152s/2700s cur=729600 trans=81 tmax=73000 load=3.23
+353.53 rung=1036800 t=167s/2700s cur=729600 trans=81 tmax=71000 load=2.51
+368.65 rung=1036800 t=182s/2700s cur=729600 trans=81 tmax=69000 load=1.96
+383.87 rung=1036800 t=198s/2700s cur=1036800 trans=85 tmax=82000 load=2.41
+399.10 rung=1036800 t=213s/2700s cur=1036800 trans=85 tmax=84000 load=2.83
+414.30 thermal 86000 mC: load suspended (frequency untouched)
+414.31 rung=1036800 t=228s/2700s cur=1036800 trans=85 tmax=86000 load=3.16
+429.41 thermal 73000 mC: load resumed
+429.43 rung=1036800 t=243s/2700s cur=883200 trans=91 tmax=73000 load=2.54
+444.56 rung=1036800 t=258s/2700s cur=729600 trans=93 tmax=71000 load=1.97
+459.77 rung=1036800 t=273s/2700s cur=1036800 trans=97 tmax=84000 load=2.64
+474.97 thermal 86000 mC: load suspended (frequency untouched)
+475.00 rung=1036800 t=289s/2700s cur=1036800 trans=97 tmax=86000 load=2.94
+490.10 thermal 73000 mC: load resumed
+490.12 rung=1036800 t=304s/2700s cur=729600 trans=101 tmax=73000 load=2.29
+505.24 rung=1036800 t=319s/2700s cur=729600 trans=101 tmax=71000 load=1.78
+520.46 rung=1036800 t=334s/2700s cur=1036800 trans=105 tmax=84000 load=2.27
+35.10 === start: kernel=6.18.40-citronics-lime-fp2-g59570e2e7e73 ladder=22 rungs (729600..2265600 kHz) HOLD=2700s
+35.22 PMIC previous power-off: pon_reason=0x01 warm_reset=0x0002 poff=0x0002 poff_bits: PS_HOLD verdict=SoC-initiated reset (normal reboot OR TZ/RPM/watchdog path)
+35.23 RESET while validating 1036800 kHz after 334s of 2700s -> rung FAILS
+35.23 bisect: PASS<=none FAIL>=1036800 -> next rung 806400 kHz
+35.24 remoteprocs: all up: remoteproc0=running, remoteproc1=running, remoteproc2=running
+35.25 validating 806400 kHz (floor 729600) under continuous 4-core load for 2700s
+33.07 === start: kernel=6.18.40-citronics-lime-fp2-g59570e2e7e73 ladder=22 rungs (729600..2265600 kHz) HOLD=2700s
+33.20 PMIC previous power-off: pon_reason=0x01 warm_reset=0x0002 poff=0x0002 poff_bits: PS_HOLD verdict=SoC-initiated reset (normal reboot OR TZ/RPM/watchdog path)
+33.21 RESET while validating 806400 kHz after 42s of 2700s -> rung FAILS
+33.21 bisect: PASS<=none FAIL>=806400 -> next rung 729600 kHz
+33.22 remoteprocs: all up: remoteproc0=running, remoteproc1=running, remoteproc2=running
+33.23 validating 729600 kHz (floor 729600) under continuous 4-core load for 2700s
+48.46 rung=729600 t=47s/2700s cur=729600 trans=67 tmax=71000 load=2.53
+63.57 rung=729600 t=62s/2700s cur=729600 trans=67 tmax=71000 load=2.03
+78.70 rung=729600 t=77s/2700s cur=729600 trans=67 tmax=70000 load=1.65
+93.97 rung=729600 t=92s/2700s cur=729600 trans=67 tmax=79000 load=2.17
+109.25 rung=729600 t=107s/2700s cur=729600 trans=67 tmax=81000 load=2.58
+124.48 rung=729600 t=123s/2700s cur=729600 trans=67 tmax=82000 load=2.89
+139.74 rung=729600 t=138s/2700s cur=729600 trans=67 tmax=83000 load=3.14
+155.01 rung=729600 t=153s/2700s cur=729600 trans=67 tmax=84000 load=3.64
+170.26 rung=729600 t=168s/2700s cur=729600 trans=67 tmax=84000 load=3.72
+185.49 rung=729600 t=184s/2700s cur=729600 trans=67 tmax=85000 load=3.96
+200.73 thermal 86000 mC: load suspended (frequency untouched)
+200.75 rung=729600 t=199s/2700s cur=729600 trans=67 tmax=86000 load=3.97
+215.78 rung=729600 t=214s/2700s cur=729600 trans=67 tmax=75000 load=3.09
+230.89 thermal 73000 mC: load resumed
+230.91 rung=729600 t=229s/2700s cur=729600 trans=67 tmax=73000 load=2.40
+246.03 rung=729600 t=244s/2700s cur=729600 trans=67 tmax=72000 load=1.87
+261.25 rung=729600 t=259s/2700s cur=729600 trans=67 tmax=82000 load=2.50
+276.51 rung=729600 t=275s/2700s cur=729600 trans=67 tmax=83000 load=2.84
+291.76 rung=729600 t=290s/2700s cur=729600 trans=67 tmax=84000 load=3.09
+307.00 rung=729600 t=305s/2700s cur=729600 trans=67 tmax=85000 load=3.30
+322.22 thermal 86000 mC: load suspended (frequency untouched)
+322.24 rung=729600 t=320s/2700s cur=729600 trans=67 tmax=86000 load=3.45
+337.26 rung=729600 t=336s/2700s cur=729600 trans=67 tmax=75000 load=2.69
+352.36 thermal 73000 mC: load resumed
+352.38 rung=729600 t=351s/2700s cur=729600 trans=67 tmax=73000 load=2.23
+367.50 rung=729600 t=366s/2700s cur=729600 trans=67 tmax=72000 load=1.73
+382.76 rung=729600 t=381s/2700s cur=729600 trans=67 tmax=82000 load=2.24
+398.00 rung=729600 t=396s/2700s cur=729600 trans=67 tmax=84000 load=2.63
+34.40 === start: kernel=6.18.40-citronics-lime-fp2-g59570e2e7e73 ladder=22 rungs (729600..2265600 kHz) HOLD=2700s
+34.52 PMIC previous power-off: pon_reason=0x01 warm_reset=0x0002 poff=0x0002 poff_bits: PS_HOLD verdict=SoC-initiated reset (normal reboot OR TZ/RPM/watchdog path)
+34.54 RESET while validating 729600 kHz after 396s of 2700s -> rung FAILS
+34.54 EVERY rung down to 729600 kHz failed under load: this is not a ceiling problem - DVFS itself is not survivable as configured.
+180.64 stopped by signal 15: load off, rung 729600 left unjudged
+33.73 === start: kernel=6.18.40-citronics-lime-fp2-g59570e2e7e73 ladder=22 rungs (729600..2265600 kHz) HOLD=2700s
+33.86 PMIC previous power-off: pon_reason=0x01 warm_reset=0x0000 poff=0x0002 poff_bits: PS_HOLD verdict=SoC-initiated reset (normal reboot OR TZ/RPM/watchdog path)
+33.87 fresh run: first rung 1036800 kHz (nearest to START=1036800)
+33.88 remoteprocs: all up: remoteproc0=running, remoteproc1=running, remoteproc2=running
+33.90 validating 1036800 kHz (floor 729600) under continuous 4-core load for 2700s
+49.13 rung=1036800 t=39s/2700s cur=729600 trans=62 tmax=70000 load=1.83
+33.23 === start: kernel=6.18.40-citronics-lime-fp2-g59570e2e7e73 ladder=22 rungs (729600..2265600 kHz) HOLD=2700s
+33.35 PMIC previous power-off: pon_reason=0x02 warm_reset=0x0000 poff=0x2000 poff_bits: UVLO verdict=BROWNOUT (PMIC undervoltage lockout)
+33.37 RESET while validating 1036800 kHz after 39s of 2700s -> rung FAILS
+33.37 bisect: PASS<=none FAIL>=1036800 -> next rung 806400 kHz
+33.38 remoteprocs: all up: remoteproc0=running, remoteproc1=running, remoteproc2=running
+33.40 validating 806400 kHz (floor 729600) under continuous 4-core load for 2700s
+48.70 thermal 88000 mC: load suspended (frequency untouched)
+48.72 rung=806400 t=43s/2700s cur=806400 trans=94 tmax=88000 load=2.17
+63.74 rung=806400 t=58s/2700s cur=729600 trans=95 tmax=76000 load=1.75
+78.76 rung=806400 t=73s/2700s cur=729600 trans=97 tmax=75000 load=1.37
+93.89 thermal 73000 mC: load resumed
+93.91 rung=806400 t=88s/2700s cur=729600 trans=97 tmax=73000 load=1.06
+109.12 thermal 90000 mC: load suspended (frequency untouched)
+109.14 rung=806400 t=103s/2700s cur=806400 trans=98 tmax=90000 load=1.71
+124.16 rung=806400 t=118s/2700s cur=729600 trans=99 tmax=75000 load=1.33
+139.28 thermal 74000 mC: load resumed
+139.30 rung=806400 t=134s/2700s cur=729600 trans=99 tmax=74000 load=1.04
+154.53 thermal 91000 mC: load suspended (frequency untouched)
+154.56 rung=806400 t=149s/2700s cur=806400 trans=102 tmax=91000 load=1.76
+169.59 rung=806400 t=164s/2700s cur=729600 trans=139 tmax=81000 load=1.52
+184.60 rung=806400 t=179s/2700s cur=806400 trans=162 tmax=78000 load=1.47
+199.63 rung=806400 t=194s/2700s cur=729600 trans=177 tmax=77000 load=1.65
+214.65 rung=806400 t=209s/2700s cur=729600 trans=187 tmax=76000 load=1.35
+229.67 rung=806400 t=224s/2700s cur=729600 trans=195 tmax=77000 load=1.05
