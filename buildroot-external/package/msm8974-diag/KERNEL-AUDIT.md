@@ -36,6 +36,17 @@ believed to test. Pinned measurements are unaffected (the margin is applied once
 and does land — measured `PMIC_STS=0xc8` = 1000 mV at 729.6 MHz with a 200 mV
 margin).
 
+**The same defect also shortens the settle delay on every rise.** The core
+computes the ramp wait from the same mismatched pair —
+`delay = |list_voltage(old_selector) − list_voltage(selector)| / ramp_delay`
+(`core.c:3749-3756`, `ramp_delay = 1250` uV/µs at `spm.c:267`) — so with a 100 mV
+margin every rise waits `|Δ − 100 mV|/1250` instead of `Δ/1250`, i.e. **80 µs
+too little**, and some rises get zero. Worked against the vendor's own slew rate
+of 2395 uV/µs (`krait_voltage_increase()`): 1651.2→2457.6 MHz moves the rail
+1015→1170 mV and needs 65 µs, but waits 44 µs. That is a genuine
+clock-before-rail window on every upward transition — the failure class the
+whole investigation has been chasing, and it is invisible to any margin.
+
 **Fix:** delete `margin_sel` and `qcom,vdd-margin-microvolt`; if an offset is
 ever wanted, use the standard `regulator-microvolt-offset`
 (`drivers/regulator/of_regulator.c:113`), which the core adds *before* mapping
@@ -144,6 +155,142 @@ field, i.e. the field can change under the loop. Bound it with
   votes the RPM. Its cost is permanent extra power/heat (vendor `qcom,l2-fmax`
   would vote corner 4 at L2 = 729.6 MHz), which feeds the aggregate-power axis,
   not the idle axis.
+
+## Clock side (krait-cc / HFPLL)
+
+The steady-state HFPLL programming is **correct and vendor-exact**:
+`config_val = 0x04D0405D`, `user_vco_mask = 0x100000`, `user_val = 0x8`,
+`low_vco_max_rate = 1248000000`, min/max 537.6 MHz–2.9 GHz, and the register
+offsets all match `qcom,hfpll-config-val` in the vendor DT. There is no droop
+register on msm8974 (vendor `reg` length is 0x20), so its absence here is right,
+not a gap. The device's own probe log agrees: 0 unlocked-output violations across
+30 s idle plus 90 s of 729.6↔2265.6 MHz hammering. **A mis-programmed PLL is not
+the cause.** What the audit did find:
+
+- **C1 (proven) — `__clk_hfpll_init_once()` picks the VCO band from a stale
+  rate.** It is called from `__clk_hfpll_enable()`, which `clk_hfpll_set_rate()`
+  calls *after* programming `USER_CTL` and `L_VAL`; it then reads
+  `clk_hw_get_rate()`, which the clk core only updates after `set_rate` returns,
+  and overwrites `USER_CTL` wholesale from the **old** rate. The vendor instead
+  derives the band from hardware (`readl(l_offset) * src_rate`). Concrete effect
+  here: probe's forced 384 MHz→2 Hz→restore dance can leave a PLL at
+  `USER_CTL = 0x100008` — high band with `L_VAL = 40` — i.e. locked but
+  out-of-band until the next `set_rate` heals it. Out-of-band-but-locked is
+  exactly "locks, then drifts with temperature and voltage".
+  *Fix:* hoist the one-time init before the L/USER writes, and read `L_VAL` from
+  hardware instead of `clk_hw_get_rate()`.
+- **C2 (proven) — an out-of-bounds table index gets written into a live CPU
+  mux.** `krait_mux_get_parent()` returns `clk_mux_val_to_index()`'s `-EINVAL`
+  through a `u8`, so it becomes **234**, is stored in `mux->old_index`, and the
+  POST notifier calls `set_parent(hw, 234)` → `table[234]` on a 2- or 3-entry
+  array (~930 bytes past it), masked to 2 bits and written into the live clock
+  mux. Unmapped hardware values today are 1 and 3 for the secondary mux and 3 for
+  the primary; since the garbage written can itself be 1 or 3, one occurrence
+  makes the fault sticky. *Fix:* fall back to `safe_sel` on a negative index and
+  validate in `set_parent`.
+- **C3 (proven) — `clk_hfpll_init()` compares the whole mode register against
+  0x7** where the vendor masks `& 0x7` (and `hfpll_is_enabled()` in the same file
+  masks correctly). If the bootloader leaves any bit ≥ 3 set in `PLL_MODE`, a
+  running, locked PLL is treated as disabled and `CONFIG_CTL`/`M`/`N`/`USER_CTL`
+  are written to it live, with no bypass or reset around the writes. One-line
+  fix, affects every HFPLL platform.
+- **C4 (proven) — the aux safe parent is unreachable.** `krait-cc.c` asks for
+  `"apu_aux"` while the clock is registered as `"acpu_aux"`; with
+  `krait-cc-v2` (our compatible) that branch is taken, so the secondary mux has
+  exactly one resolvable parent: `qsb`, registered at a fictional 1 Hz. QSB is
+  therefore the effective safe parent for every DVFS transition on all four cores
+  and the L2. Not fatal — 542+ hammer transitions survived, and QSB is a real
+  ~225 MHz clock — but the intended safe source is dead code and the rate
+  bookkeeping is fiction.
+- **C5 — no `ABORT_RATE_CHANGE` case** in `krait_notifier_cb()`, so a failed PRE
+  notification leaves the core parked on QSB permanently.
+- **C6 — the mux/safe-parent ordering itself is sound.** Traced against
+  `clk.c`: the PRE notifier reaches the primary mux in every reachable topology,
+  the switch to the safe parent is committed with a barrier before the PLL is
+  touched, and the mux is restored only after the PLL is locked and `OUTCTRL` is
+  set. The L2 mux is handled identically. No window with a core on a disabled or
+  mid-reprogram PLL.
+
+**Supplies:** there is no regulator code anywhere in the Krait clock stack, and
+the binding forbids it (`qcom,hfpll.yaml` is `additionalProperties: false` with
+no `*-supply`), so this is an upstream gap rather than a fork omission. The
+analog rail is covered — `pm8941_l12` is `always-on`+`boot-on` at 1.8 V, and
+`qcom_smd-regulator` only ever writes the RPM **active** set, which is exactly
+what the vendor's `_ao` handle does. The digital (CX) side is covered only as a
+side effect of the CPU OPP pin.
+
+**One real semantic divergence:** we attach `MSM8974_VDDCX`, not
+`MSM8974_VDDCX_AO`, so the super-turbo corner is mirrored into the RPM **sleep**
+set. The vendor never votes CX super-turbo in sleep. That blocks vdd-min/XO
+shutdown and holds pm8841 S2 at its top corner continuously — a power and
+thermal cost, and consistent with "more margin made it hotter and worse".
+
+**The MX theory is now closed for good.** The vendor does not vote MX for the
+Krait/L2/HFPLL path either (`pm8841_s1` appears only on the MSS and pronto nodes),
+`msm8974_rpmpds[]` has no MX domain at all, and `MSM8974_VDDMX` does not exist in
+the bindings — so nothing in this fork *could* vote it. The vendor even pins MX at
+its 675 mV minimum in the RPM sleep set. Mainline models a CX→MX parent where the
+domain exists (`cx_rwcx0_lvl.parent = mx_rwmx0_lvl`), but msm8974 has no such
+domain.
+
+## Top unverified assumption: does the CX vote actually arrive?
+
+Everything protecting the HFPLL digital logic and the L2 rests on one link nobody
+has checked: that `required-opps = <&rpmpd_opp_super_turbo>` reaches the RPM as a
+corner request. The plumbing reads correct end to end, but
+`rpmpd_set_performance()` **silently returns 0 without sending anything** if the
+domain is not enabled — so a failure here produces no dmesg evidence at all.
+
+If the vote is not landing, every symptom fits: HFPLL digital and L2 logic run on
+whatever corner the remote subsystems happen to hold, resets happen at any
+frequency because the L2 is *always* at 729.6 MHz, idle or loaded, and no amount
+of APC margin helps because the starved rail is CX. It would also explain why the
+"pin CX at super-turbo" commit appeared to change nothing.
+
+**Measurement (read-only, no `/dev/mem`):** after the device has been up long
+enough for `sync_state` to fire, read `/sys/kernel/debug/pm_genpd/pm_genpd_summary`
+and confirm the `cx` domain is `on` with performance state **6**, with four
+devices attached. Anything else — `off`, state 0, or fewer than four devices — is
+the bug, and the fix is in the attach path, not the clock drivers.
+
+## Fork-delta findings
+
+The complete delta against 6.18.40 is 74 files, +6781/−196. Beyond the items
+above:
+
+- **`6.18/rc` was missing `7fc3ec8151dc` ("take a spinlock for register
+  access").** It had been on staging since `4975b57c83eb`, so rc — and therefore
+  the `.deb` on the device and every soak to date — ran with regmap taking a
+  **mutex** and allocating `GFP_KERNEL` while callers held `clk_hfpll::lock` with
+  interrupts disabled. Merged into rc as `e8333aa71532`. Any conclusion drawn
+  from earlier soaks is confounded by this.
+- **The margin write bypasses regulator constraints.** The addition happens
+  *after* `regulator_set_voltage()` has validated the request, so
+  `regulator-max-microvolt` is unenforceable and the top rungs silently clamp at
+  selector 255 = 1.275 V.
+- **`saw_l2_vreg` has no board-level window** — it declares the raw hardware
+  range 350000–1275000 µV with no name, no floor. Nothing structurally prevents
+  350 mV on the rail feeding all four Kraits and the L2.
+- **Eight other board families inherit FP2-tuned DVFS** from the shared
+  `qcom-msm8974.dtsi` (Krait cpufreq down to 300 MHz at raw PVS voltages with a
+  permanent max CX vote), while the margin and the 729.6 MHz floor are FP2-only
+  overrides. Separately, the rpmpd migration deleted OnePlus bacon's unique
+  `pm8841_s2` `min-microvolt = <875000>` **and** its `regulator-always-on` with
+  no rpmpd equivalent.
+- **The CX corner was keyed off the wrong variable.** The vendor's `qcom,l2-fmax`
+  keys the corner off the **L2** rate; the first fork attempt graded it by CPU
+  rate, and the current one pins it at max — which is accidentally safe and hides
+  the real gap, namely that nothing in the fork ever sets or even reads the L2
+  rate.
+- **`qcom,vdd-margin-microvolt` is undocumented** (no binding update) and FP2 is
+  its only user — unupstreamable as a knob; it should have been debugfs or a
+  module parameter.
+- **Branch hygiene defeats bisection of exactly this bug.** The
+  `cpufreq-cx-corner`, `pon-reason` and `ci-dispatch-guard` topics were each cut
+  from staging, so they contain all of dvfs-spm + adsp-sensors + gpu-iommu +
+  smd-rpm-clocks + mmcc — none can be built or tested in isolation, or rebased
+  for submission. And `d9b7c51b26fe`, whose own subject says "needs testing and
+  probably a proper fix", is on **rc** and therefore in every soaked image.
 
 ## The next experiment, and why this one
 
