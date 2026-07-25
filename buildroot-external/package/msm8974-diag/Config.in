@@ -1,0 +1,17 @@
+config BR2_PACKAGE_MSM8974_DIAG
+	bool "msm8974-diag"
+	select BR2_PACKAGE_PYTHON3
+	help
+	  Diagnostics for the MSM8974 CPU power and clock path.
+
+	  Read-only register probes (PMIC power-on/power-off reason,
+	  HFPLL rates and lock state, SAW gang-rail voltage, per-core
+	  LDO/BHS state, APC SMPS setpoints), DVFS stressors, and
+	  resumable soak harnesses that keep fsync'd logs so a silent
+	  reset still leaves evidence.
+
+	  Written while investigating resets that produce no kernel
+	  output at all on the 6.18 fork. See the package README for the
+	  measurements, the safety rules (never offline a CPU, never
+	  leave scaling_min_freq pinned high) and how to deploy onto a
+	  freshly flashed device.

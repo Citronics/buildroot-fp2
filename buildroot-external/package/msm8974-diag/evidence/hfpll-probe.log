@@ -1,0 +1,4 @@
+BASELINE-idle: 30s samples=852202 cpufreq_transitions=4 violations_total=3 per_pll=hfpll0=2,hfpll2=1
+TEST-hammering: 90s samples=1845591 cpufreq_transitions=90 violations_total=59 per_pll=hfpll0=15,hfpll1=16,hfpll2=12,hfpll3=16
+BASELINE-idle: 30s samples=875694 cpufreq_transitions=7 violations_total=0 per_pll=
+TEST-hammering: 90s samples=1850552 cpufreq_transitions=89 violations_total=0 per_pll=

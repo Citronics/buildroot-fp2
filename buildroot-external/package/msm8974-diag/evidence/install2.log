@@ -1,0 +1,67 @@
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Solving dependencies...
+The following NEW packages will be installed:
+  linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9
+0 upgraded, 1 newly installed, 0 to remove and 1 not upgraded.
+Need to get 15.9 MB of archives.
+After this operation, 39.3 MB of additional disk space will be used.
+Get:1 https://citronics.github.io/deb-packages stable/experimental armhf linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9 armhf 3.2~rc3.8 [15.9 MB]
+Fetched 15.9 MB in 3s (6187 kB/s)
+Selecting previously unselected package linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 21022 files and directories currently installed.)
+Preparing to unpack .../linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9_3.2~rc3.8_armhf.deb ...
+Reclaiming space on /boot before installing kernel 6.18.40-citronics-lime-fp2-g0c5d971f52d9
+Removing /boot/vmlinuz-6.18.39-citronics-lime-fp2-gdc92e638f6c0
+/boot has 89044 KB free, proceeding
+Unpacking linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9 (3.2~rc3.8) ...
+Setting up linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9 (3.2~rc3.8) ...
+update-initramfs: Generating /boot/initrd.img-6.18.40-citronics-lime-fp2-g0c5d971f52d9
+[Hook] Replacing /init with custom version
+[Hook] Copying DTB(s): qcom-msm8974pro-fairphone-fp2.dtb
+[Hook] Copying DTB from /usr/lib/linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9/qcom-msm8974pro-fairphone-fp2.dtb to /var/tmp/mkinitramfs_AyIdXv/boot/qcom-msm8974pro-fairphone-fp2.dtb
+[Hook] Add kpartx and its dependencies
+[Hook] Add busybox
+[Hook] Add unudhcpd and its dependencies
+[Hook] Copy overlay files to initramfs (DESTDIR=/var/tmp/mkinitramfs_AyIdXv)
+[Hook] Copying functions.sh
+[Hook] Copying etc overlay
+[Hook] Copying deviceinfo
+[Hook] Copying source_deviceinfo
+[Hook] Copying initramfs.load
+[Hook] Verifying overlay files
+/var/tmp/mkinitramfs_AyIdXv/functions.sh
+/var/tmp/mkinitramfs_AyIdXv/usr/share/deviceinfo/deviceinfo
+/var/tmp/mkinitramfs_AyIdXv/usr/share/misc/source_deviceinfo
+[Hook] Add telnetd and its dependencies
+[Hook] Create mountpoints
+[Hook] Rename kernel image (arch: armv7)
+[Hook] Kernel not in DESTDIR, skipping rename (will be done outside initramfs)
+Updating boot partition for kernel 6.18.40-citronics-lime-fp2-g0c5d971f52d9
+Generating initramfs for 6.18.40-citronics-lime-fp2-g0c5d971f52d9
+update-initramfs: Generating /boot/initrd.img-6.18.40-citronics-lime-fp2-g0c5d971f52d9
+W: Kernel configuration /boot/config-6.18.40-citronics-lime-fp2-g0c5d971f52d9 is missing, gzip compression support (CONFIG_RD_GZIP) cannot be checked and is assumed to be available
+[Hook] Replacing /init with custom version
+[Hook] Copying DTB(s): qcom-msm8974pro-fairphone-fp2.dtb
+[Hook] Copying DTB from /usr/lib/linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9/qcom-msm8974pro-fairphone-fp2.dtb to /var/tmp/mkinitramfs_Ll7tNO/boot/qcom-msm8974pro-fairphone-fp2.dtb
+[Hook] Add kpartx and its dependencies
+[Hook] Add busybox
+[Hook] Add unudhcpd and its dependencies
+[Hook] Copy overlay files to initramfs (DESTDIR=/var/tmp/mkinitramfs_Ll7tNO)
+[Hook] Copying functions.sh
+[Hook] Copying etc overlay
+[Hook] Copying deviceinfo
+[Hook] Copying source_deviceinfo
+[Hook] Copying initramfs.load
+[Hook] Verifying overlay files
+/var/tmp/mkinitramfs_Ll7tNO/functions.sh
+/var/tmp/mkinitramfs_Ll7tNO/usr/share/deviceinfo/deviceinfo
+/var/tmp/mkinitramfs_Ll7tNO/usr/share/misc/source_deviceinfo
+[Hook] Add telnetd and its dependencies
+[Hook] Create mountpoints
+[Hook] Rename kernel image (arch: armv7)
+[Hook] Kernel not in DESTDIR, skipping rename (will be done outside initramfs)
+Copied vmlinuz-6.18.40-citronics-lime-fp2-g0c5d971f52d9 to /boot/zImage
+Copied DTB: /usr/lib/linux-image-6.18.40-citronics-lime-fp2-g0c5d971f52d9/qcom-msm8974pro-fairphone-fp2.dtb
+Boot partition updated for 6.18.40-citronics-lime-fp2-g0c5d971f52d9
