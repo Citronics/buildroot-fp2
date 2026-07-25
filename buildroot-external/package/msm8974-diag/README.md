@@ -41,9 +41,12 @@ driven these PLLs and this rail, and it has no external validation.
 - `msm8974-pinned-soak` — real load at one fixed OPP (transition counter must
   stay frozen). Thermals are handled by suspending the *load*, never by
   lowering the frequency, so "survived" is never a throttling artifact.
-- `msm8974-descend-validate` — walks the ceiling down (960 → 883.2 → 806.4 →
-  729.6 MHz) under sustained 4-core load, 45 min per rung, resuming across
-  resets and stepping down automatically; says explicitly if every rung fails.
+- `msm8974-descend-validate` — walks the ceiling down from the top of whatever
+  OPP set the kernel exposes, under sustained 4-core load, `HOLD` seconds per
+  rung (default 45 min), resuming across resets and stepping down
+  automatically. Failing rungs cost only their MTBF; the first surviving rung
+  is the answer — the highest operating point the board tolerates under load.
+  Says explicitly if every rung fails.
 - `msm8974-ceiling-sweep` — the ascending variant, with a no-transition control
   rung first.
 - `msm8974-load-cycle` — duty-cycled real load (BOINC when it actually has

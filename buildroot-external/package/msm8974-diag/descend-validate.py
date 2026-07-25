@@ -6,10 +6,12 @@ cap is a hypothesis: on the 6.16 reference only *one* core ever ran at 960 MHz
 (the other three sat on the aux mux), so four cores at 960 MHz has never
 actually been proven on this board.
 
-So rather than assume, walk down the remaining OPPs under sustained 4-core
-load until one survives:
-
-    960.0 -> 883.2 -> 806.4 -> 729.6 MHz
+So rather than assume anything, walk the ceiling down from the top of
+whatever OPP set the running kernel exposes, under sustained 4-core load,
+until one survives. Failing rungs are cheap (they reset within minutes);
+the first surviving rung costs HOLD seconds and *is* the answer: the
+highest operating point this board tolerates under load, i.e. the usable
+DVFS range.
 
 Each ceiling must survive HOLD seconds of continuous load. State is fsync'd, so
 when the board resets the next boot picks up where it left off, records that
@@ -23,12 +25,35 @@ import os, subprocess, time
 import os as _os
 DIAG = _os.environ.get("DIAG_DIR", "/var/log/msm8974-diag")
 
-CEILINGS = [960000, 883200, 806400, 729600]
+# The ladder is derived from what the kernel actually exposes, descending from
+# the top, so it matches whichever OPP set is under test instead of a set
+# hardcoded for one experiment. The point is to find the highest operating
+# point that survives sustained load - that number *is* the usable DVFS range.
+def available_khz():
+    try:
+        raw = open("/sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies").read()
+        return sorted({int(x) for x in raw.split()}, reverse=True)
+    except Exception:
+        # No sysfs list (some kernels omit it): fall back to the OPP debugfs.
+        khz = set()
+        base = "/sys/kernel/debug/opp"
+        for root, _dirs, files in os.walk(base):
+            if "rate_hz" in files and "available" in files:
+                try:
+                    if open(os.path.join(root, "available")).read().strip() in ("Y", "1"):
+                        khz.add(int(open(os.path.join(root, "rate_hz")).read()) // 1000)
+                except Exception:
+                    pass
+        return sorted(khz, reverse=True)
+
+
+CEILINGS = available_khz()
+
 FLOOR = 729600
 HOLD = int(os.environ.get("HOLD", "2700"))
 HOT, COOL = 85000, 75000
-STATE = "" + DIAG + "/validate-state"
-LOG = "" + DIAG + "/validate.log"
+STATE = DIAG + "/validate-state"
+LOG = DIAG + "/validate.log"
 CPUFREQ = "/sys/devices/system/cpu/cpufreq"
 
 log = open(LOG, "a", buffering=1)
