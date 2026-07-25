@@ -68,14 +68,57 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+# The thermal guard is enabled unconditionally and is NOT part of any
+# experiment: it only ever removes load, never changes frequency, so it cannot
+# turn a failing soak into a passing one. It exists because an experiment that
+# holds its own guard stops guarding the moment the experiment is killed - which
+# once left an orphaned stress-ng running on a kernel that cannot throttle,
+# straight into the 105 C critical trip.
+cat > /etc/systemd/system/msm8974-thermal-guard.service <<EOF
+[Unit]
+Description=msm8974 independent thermal guard (removes load, never touches frequency)
+After=multi-user.target
+
+[Service]
+Type=simple
+Environment=DIAG_DIR=$DIAG
+ExecStart=/usr/sbin/msm8974-thermal-guard
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# The convergence harness is installed but left DISABLED: it applies load.
+cat > /etc/systemd/system/msm8974-converge.service <<EOF
+[Unit]
+Description=msm8974 DVFS ceiling convergence under load (resumable across resets)
+After=multi-user.target
+
+[Service]
+Type=simple
+Environment=DIAG_DIR=$DIAG
+Environment=HOLD=2700
+Environment=START=1036800
+ExecStart=$BIN/msm8974-converge-validate
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable pin-early.service >/dev/null
 systemctl enable msm8974-soak-logger.service >/dev/null
+systemctl enable msm8974-thermal-guard.service >/dev/null
 systemctl start pin-early.service
 systemctl restart msm8974-soak-logger.service
+systemctl restart msm8974-thermal-guard.service
 
 # Anything that applies load or raises the ceiling stays disabled by default.
-for u in msm8974-pinned-soak msm8974-validate; do
+for u in msm8974-pinned-soak msm8974-validate msm8974-converge; do
   systemctl disable --now "$u" >/dev/null 2>&1 || true
 done
 

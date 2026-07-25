@@ -30,11 +30,16 @@ define MSM8974_DIAG_INSTALL_TARGET_CMDS
 	# soak harnesses
 	$(INSTALL) -D -m 0755 $(@D)/soak-log.sh      $(TARGET_DIR)/usr/bin/msm8974-soak-log
 	$(INSTALL) -D -m 0755 $(@D)/pinned-soak.py   $(TARGET_DIR)/usr/bin/msm8974-pinned-soak
-	$(INSTALL) -D -m 0755 $(@D)/descend-validate.py $(TARGET_DIR)/usr/bin/msm8974-descend-validate
+	$(INSTALL) -D -m 0755 $(@D)/converge-validate.py $(TARGET_DIR)/usr/bin/msm8974-converge-validate
 	$(INSTALL) -D -m 0755 $(@D)/ceiling-sweep.sh $(TARGET_DIR)/usr/bin/msm8974-ceiling-sweep
 	$(INSTALL) -D -m 0755 $(@D)/load-cycle.sh    $(TARGET_DIR)/usr/bin/msm8974-load-cycle
+	# safety net: independent of whatever applies load
+	$(INSTALL) -D -m 0755 $(@D)/thermal-guard.sh $(TARGET_DIR)/usr/sbin/msm8974-thermal-guard
 	# deployment / safe-state helper
 	$(INSTALL) -D -m 0755 $(@D)/msm8974-diag-deploy.sh $(TARGET_DIR)/usr/bin/msm8974-diag-deploy
+	# fw-forensics.py is deliberately NOT installed: reading the RPM MSG RAM /
+	# IMEM ranges over /dev/mem reset this SoC instantly (see README). It is
+	# kept in the package as the record of that hazard.
 endef
 
 $(eval $(generic-package))
