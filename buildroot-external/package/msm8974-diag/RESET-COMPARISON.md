@@ -517,6 +517,37 @@ isn't honored, fall back to per-core-MMIO DT bisection (during pinned-load
 death DVFS is quiescent, so the bad access is in a hot generic path —
 tick/IPI/GIC).
 
+## 9. XPU-err-fatal: REFUTED (2026-07-27)
+
+Built the phone's exact kernel + a cmdline-gated `qcom_scm` wrapper for the
+vendor's `SCM_SVC_MP(0xC)/XPU_ERR_FATAL(0xe)` call
+(`6.18/topic/xpu-errfatal-diag`), deployed via the extlinux swap. Results:
+
+- **The interface is live** — READ returned cleanly (no hang/fault), and a
+  read-set-read calibration proved the write takes effect:
+  `SET config=0(ENABLE): read-before=1 set-ret=0 read-after=0` (state flipped
+  1→0). Encoding: **state 1 = DISABLED, 0 = ENABLED**.
+- **Firmware default is DISABLED (1)** — our mainline never arms XPU-err-fatal;
+  the vendor *enables* it at early_initcall. So XPU violations are **already
+  non-fatal by default on our kernel**.
+- **Yet we still reset** — the W4 pinned-300 load died in ~30 s with err-fatal
+  disabled (default) and again with it explicitly disabled. A non-fatal XPU
+  violation does not reset the SoC, so **the reset is not an XPU-err-fatal
+  violation. REFUTED.**
+- The lk2nd `md 0xfe806000` reset (which fingerprint-matched the bug in §7) is
+  therefore a **separate always-on TZ region lock**, not this flag — the §7
+  "calibration match" was coincidental and is withdrawn as evidence.
+
+**Consequence:** the actor is external and proactive (not a Linux watchdog,
+not a hang, not XPU-err-fatal). Leading remaining candidate: **RPM ERR_FATAL**
+(§4.5 report-4 #1). Open puzzle carried forward: under a *pinned* OPP there are
+no CX re-votes, so the concurrent-core dose-response still lacks a clean
+RPM-traffic explanation — which keeps a per-physical-core electrical/power
+mechanism (per-core APC/BHS/MDD, or coherency with the static L2) on the
+table. Next: a cheap physical-multi-core-vs-total-compute discriminator
+(4 threads on 1 core vs 4 cores), then single-variable bisection of the fork's
+DVFS/power deltas from Android.
+
 ## 8. Tick-dose (NO_HZ_FULL), 2026-07-27
 
 Deployed a `CONFIG_NO_HZ_FULL=y` kernel (stock rc source + that flag) to the
