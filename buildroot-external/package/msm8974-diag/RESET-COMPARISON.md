@@ -218,6 +218,90 @@ safely readable via the syscon regmap
 (`/sys/kernel/debug/regmap/dummy-sram@0xfe805000/registers`) — the TZ diag
 region may already contain the answer after a reset.
 
+## 4.5 Vendor-BSP audit results (three parallel source audits, 2026-07-26)
+
+Three independent audits of the vendor 3.4 BSP (`int/10/fp2`) against our tree,
+each with file:line evidence (full texts in the session transcript; key claims
+reproduced here).
+
+**Closed by the audits (no longer suspects):**
+
+- **Our SPM programming is byte-exact vendor**: both SAW sequences, `spm_cfg`,
+  `spm_dly`, `pmic_data0/1`, init `SPM_CTL` — all match the FP2 DT
+  (`msm8974pro-pm.dtsi`). The "fork-only SPM constants" worry is closed.
+- **No clock concurrency race**: mainline serialises every `clk_set_rate`
+  under the global `prepare_lock`, and each core has a private HFPLL, divider,
+  mux and cp15 register. Four policies cannot race each other.
+- **Voltage↔rate ordering is equivalent to the vendor's** (voltage-first up,
+  rate-first down), and the shared-rail aggregation is a max with no window in
+  which the rail can dip below a running core's requirement.
+- **The static L2 is "slow, not unsafe"**: no core:L2 ratio limit exists
+  anywhere in the vendor BSP; the vendor itself ships ratios up to 1.53; a
+  slower L2 draws less current. Demoted as a reset cause (still a parity and
+  performance defect: vendor scales the L2 by a max-over-cores table and
+  votes CX from `qcom,l2-fmax`; the L2 imposes **no** gang-rail floor).
+- **OPP voltages byte-identical to the vendor tables** (pvs9 and pvs12 both
+  checked). CX corner: our pinned level 6 *is* the vendor's ceiling
+  (their corner 7); Android's observed 5↔7 = our 4↔6.
+- **Phase count is fine**: `platsmp.c` writes port 1 = 4 phases at secondary
+  release — the vendor's maximum/conservative setting for load.
+- **CPU0's head switch is fine**: measured `PWR_GATE_CTL = 0x403f3f7f` on all
+  four cores (pure BHS, LDO powered down) — lk2nd leaves cpu0 in the same
+  state mainline puts cpu1-3 into.
+- **MDD / `LDO_VREF_SET` zeros are safe in our configuration**: MDD is the
+  bandgap for the per-core LDO/retention modes, which we never select (always
+  BHS, no SPM retention state programmed).
+
+**The convergent top suspect — S1 sharpened:**
+
+Two audits independently landed on the same omission: **the Krait gang FTS's
+PFM/PWM mode is never commanded by our kernel.** The vendor forces **PWM**
+(`0x80`) through L2 SAW `VCTL` **port 2** whenever more than one core is
+online or load exceeds `qcom,pfm-threshold` (`krait-regulator.c:481-508`),
+before raising phases; our driver writes port 0 (voltage) only, and nothing
+else in the tree touches port 2. The SAW's `pmic_data0/1` decode as exactly
+the PWM (`…80`) and PFM (`…00`) command bytes. So the FTS mode is whatever
+the bootloader left — **and it is unreadable from HLOS** (SPMI ownership
+filter returns zeros for the pm8841 APC peripherals; verified live). A gang
+rail left in PFM/auto supplies idle handsomely and collapses under a 4-core
+current step, invisible to `PMIC_STS`. One audit's summary: the only
+candidate that explains load-dependence, frequency-independence (pinned
+1190.4 dies like 2.27 GHz), temperature aggravation, the clean PS_HOLD, and
+Android's immunity.
+
+**Demoted or terminal-mechanism-missing:**
+
+- **Missing `local-timer-stop` on `cpu_spc`** (real mainline Krait-wide DT
+  bug: `armv7-timer` has no `always-on`, so the clockevent is C3STOP, yet
+  cpuidle never hands the tick to the broadcast timer around collapse).
+  *But*: the idle baseline's 30 s samples land at 30.04 s intervals through
+  ~29 collapses/s — timers are punctual through SPC on this silicon — and the
+  proposed terminal mechanism (APSS watchdog bite) is dead: watchdog
+  `inactive`, `bootstatus=0` on a boot that followed a PS_HOLD death. Fix for
+  correctness/parity; not the reset chain as proposed.
+- **Unserialized `TERMINATE_PC`** (vendor takes a TZ-released SMEM remote
+  spinlock around every collapse — FP2 sets `qcom,allow-synced-levels`; our
+  `qcom_scm_cpu_power_down()` takes nothing). A TZ-side inconsistency
+  resetting via PS_HOLD fits the signature, **but** concurrent collapse is
+  far more frequent at idle (which survives) than under load (which dies) —
+  the inversion argues against the naive form. Stays mid-rank pending the
+  PS_HOLD-actor analysis.
+- **Sec-mux parent map inverted** (`sec_mux_map = {2,0}` with parents
+  `{qsb, acpu_aux}` — index 1 programs selector 0 = QSB, the state the
+  vendor's own comment forbids; armed by our `8c8328961a45` rename). Live
+  snapshot shows cores at 307.2 MHz off `hfpll_div` at the 300 MHz rung, so
+  it has not fired; cannot explain the pinned-1190.4 death. **Fix
+  regardless** (one-liner), it is a real trap.
+- **HFPLL output enabled after a failed lock poll** (our boot log's
+  `hfpll1 failed to lock (L_VAL 0)` proves the path live; vendor waits
+  forever). Transition-path only; cannot explain the pinned death. Fix
+  regardless.
+- **APC config zeros** (`PWR_GATE_MODE`/`DLY`/`PWR_GATE_CONFIG` — the last
+  now measured `0x0` vs vendor `0x0308736E`): with the hardware sequencer
+  disabled, the likely consequence is a *shallower* collapse than the
+  vendor's (clamps + reset, head switch never opened), i.e. electrically
+  safer, not less. Parity item, not a reset mechanism on current evidence.
+
 ## 5. The test plan (revised)
 
 Single variable per run, precondition verified in the log, thermal kept out of
@@ -235,11 +319,18 @@ the verdict:
    logical bug in the load path. Each run logs the setpoint every sample — if
    `VCTL`/`PMIC_STS` ever moves during a pinned run, someone else is driving
    the rail (sequencer), which is its own answer.
-3. **Identify the reset actor** (S4) — read the IMEM TZ diag region immediately
+3. **The port-2 PWM discriminator** (after the ladder, single variable): with
+   the frequency pinned (no port-0 traffic), issue the vendor's own
+   "FTS → PWM" command — L2 SAW `VCTL` port 2, data `0x80`, exactly what
+   `krait-regulator.c` sends whenever a second core comes online — then rerun
+   the deadliest ladder rung. Survives where it died ⇒ S1 convicted, and the
+   fix is the vendor-parity port-2 write in the kernel. (Runtime poke is the
+   *measurement*; the fix lands as a driver patch.)
+4. **Identify the reset actor** (S4) — read the IMEM TZ diag region immediately
    after a load-induced reset via the safe syscon path; serial console attached
    for anything TZ prints on the way down.
-4. **Only then design the fix** on whichever of S1–S4 the ladder and the vendor
-   BSP analyses (four running in parallel) convict.
+5. **Only then design the fix** on whichever of S1–S4 the ladder, the
+   discriminator and the PS_HOLD-actor analysis convict.
 
 ## Update log
 

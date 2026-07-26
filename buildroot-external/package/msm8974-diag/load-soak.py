@@ -84,6 +84,32 @@ def policies():
     return [os.path.join(CPUFREQ, p) for p in os.listdir(CPUFREQ) if p.startswith("policy")]
 
 
+_saw = None
+
+
+def rail():
+    """Krait gang-rail setpoint from the L2 SAW: (VCTL uV, PMIC_STS uV).
+
+    This is the arbiter's latched command (uV = selector * 5000), not a pad
+    measurement - its job here is to catch anything OTHER than the pinned
+    request driving the rail during a run.  Returns (None, None) if /dev/mem
+    is unavailable.
+    """
+    global _saw
+    try:
+        if _saw is None:
+            import mmap
+            fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
+            _saw = mmap.mmap(fd, 0x1000, mmap.PROT_READ, mmap.MAP_SHARED,
+                             offset=0xf9012000)
+            os.close(fd)
+        def sel(off):
+            return int.from_bytes(_saw[off:off+4], "little") & 0xff
+        return sel(0x1c) * 5000, sel(0x14) * 5000
+    except Exception:
+        return None, None
+
+
 def pin(khz):
     """Pin every policy, and *verify* it took.
 
@@ -188,6 +214,9 @@ t0 = time.time()
 vmin = None
 paused = False
 pauses = 0
+# The setpoint watch only means something when the frequency is pinned: with
+# DVFS free-running the rail is supposed to move.  None disarms it.
+rail_seen = set() if FREQ != "range" else None
 while time.time() - t0 < DURATION:
     # Sample as fast as the ADC allows for a second, keeping the minimum: the
     # droop that matters is far shorter than a 1 Hz sample period.
@@ -196,6 +225,15 @@ while time.time() - t0 < DURATION:
         v = vbat()
         if v is not None and (vmin is None or v < vmin):
             vmin = v
+    # Setpoint watch, every second: during a pinned run the SAW command must
+    # never move.  If it does, something other than our request is driving the
+    # rail (a sequencer, AVS, another writer) - log it the moment it happens.
+    vc, ps = rail()
+    if vc is not None and rail_seen is not None:
+        if rail_seen and (vc, ps) not in rail_seen:
+            say("RAIL MOVED: VCTL=%duV PMIC_STS=%duV (previously %s)"
+                % (vc, ps, sorted(rail_seen)))
+        rail_seen.add((vc, ps))
     # Thermal guard, every second. Load is removed, frequency is not touched.
     t = tmax()
     if not paused and t > HOT:
@@ -210,10 +248,11 @@ while time.time() - t0 < DURATION:
     el = int(time.time() - t0)
     if el % 30 == 0:
         alive = sum(1 for p in kids if p.poll() is None)
-        say("t=%4ds workers_alive=%d paused=%s pauses=%d load=%s cur=%s trans=%s VBAT=%s min=%s tmax=%d"
+        say("t=%4ds workers_alive=%d paused=%s pauses=%d load=%s cur=%s trans=%s rail=%s/%s VBAT=%s min=%s tmax=%d"
             % (el, alive, paused, pauses, read("/proc/loadavg").split()[0],
                read(CPUFREQ + "/policy0/scaling_cur_freq"),
                read(CPUFREQ + "/policy0/stats/total_trans"),
+               vc if vc is not None else "?", ps if ps is not None else "?",
                ("%.3fV" % vbat()) if vbat() is not None else "n/a",
                ("%.3fV" % vmin) if vmin else "n/a", tmax()))
         if alive == 0 and not paused:
