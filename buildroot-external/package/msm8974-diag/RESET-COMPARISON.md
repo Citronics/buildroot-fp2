@@ -1,3 +1,41 @@
+# FP2 resets: FOUND — TZ XPU-err-fatal was never armed (2026-07-27)
+
+**ROOT CAUSE / FIX (load-validated, idle-validation in progress).** The vendor
+Android BSP arms TrustZone XPU-violation err-fatal at early boot
+(`arch/arm/mach-msm/scm-xpu.c`: `scm_call(SCM_SVC_MP=0xC, XPU_ERR_FATAL=0xe,
+config=ENABLE=0)`). Mainline never does this on msm8974, leaving TZ's XPU
+error handling in the SBL-default state — which **silently PS_HOLD-resets the
+SoC under multi-core CPU load**. Issuing the same enable call makes the
+platform behave like the vendor and the resets stop.
+
+On-device, same binary, clean A/B (W4 pinned 300 MHz):
+- err-fatal **DISABLED** (firmware default, our mainline): dies ~30 s
+  (= every historical death, n=many).
+- err-fatal **ENABLED** (config=0, Android's call): **survived 600 s** then a
+  full-DVFS run up to 2.27 GHz with no reset (thermal-limited only). 12–20×
+  past anything ever seen.
+
+The write was verified effective (read-set-read: state 1→0). The fix works
+with the per-core APC power-gate registers still at 0 (read live), so it is a
+TZ-side mechanism, independent of — and evidence against — the
+missing-APC-programming hypothesis. RPM err_fatal independently refuted for
+the pinned-load dose-response. The exact TZ internal reason enabling
+"violations fatal" stabilises is opaque (no TZ source) but the fix is
+empirical + vendor-faithful.
+
+**Shippable form (built, booted, auto-enabled from DT with no cmdline):** a
+`qcom_scm` wrapper for the call + a `qcom,xpu-err-fatal` DT property on the
+msm8974 scm node (scoped so no other SoC is affected) + the `qcom_scm.
+xpu_errfatal=` cmdline override for diagnostics. Branch:
+`6.18/topic/xpu-errfatal-diag`.
+
+**Remaining before final sign-off:** idle-death validation (the 5–35 min idle
+resets are a second death mode — must confirm the fix covers them), a longer
+soak, and the §1.1 regression sweep. Everything below documents the
+investigation that led here.
+
+---
+
 # FP2 resets: Android as the reference, and what the measurements have closed
 
 A working document for the comparison in progress. It exists because this
