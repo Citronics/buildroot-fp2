@@ -1,0 +1,56 @@
+Real Fairphone 2 (with battery), Android 10 fp2_sibon-userdebug 23.02.0-rel.0
+captured over adb as root. Same SoC as the carrier rig: soc_id 217
+(MSM8974PRO-AA), revision 1.1, speed bin 1 - but PVS bin 9 where the rig is
+PVS 12 (a lower PVS bin needs more voltage, which is why this phone's rails read
+higher for the same frequency).
+
+VENDOR CPUFREQ TABLE, LIVE (confirms the 14 rungs, refutes the 960 MHz floor)
+  scaling_available_frequencies:
+    300000 422400 652800 729600 883200 960000 1036800 1190400 1267200
+    1497600 1574400 1728000 1958400 2265600
+  scaling_min_freq = 300000     scaling_max_freq = 2265600
+  governor         = interactive
+  cores online     = 0-3, each running its own frequency
+
+VENDOR RAILS AT AN ARBITRARY MOMENT (per-core Krait regulators, live)
+  krait0 875000 uV @ 1036.8 MHz      krait1 800000 uV @  300.0 MHz
+  krait2 875000 uV @ 1267.2 MHz      krait3 875000 uV @  883.2 MHz
+  8841_s2_corner_ao = 7 (SUPER_TURBO, enabled)
+  8841_s2_corner    = 5 (NOM, enabled)
+  8841_s1 (MX)      = 675000 uV, state=disabled
+  l2_clk            = 1497600000 Hz with the fastest core at 1267.2 MHz
+
+  Two things worth noting. The CX corner is voted dynamically (observed
+  oscillating 5 <-> 7), not pinned - and corner 7 with the L2 at 1497.6 MHz is
+  exactly what qcom,l2-fmax prescribes, so that mapping is confirmed on real
+  hardware. MX sits at its 675 mV minimum and disabled, which again shows the
+  Krait/L2 path does not vote MX.
+
+FOUR-CORE LOAD AT MAX, 60 s (performance governor, 4 busy loops)
+  cores          1497.6 - 2265.6 MHz, dancing under thermal mitigation
+  VBAT           3.926 - 3.985 V, steady, no downward trend
+  current_now    250 - 525 mA reported
+  tzone0         81 - 83 C
+  result         NO RESET
+
+THE CONTRAST THAT MATTERS
+  carrier rig, 4 cores at 300 MHz (the lowest OPP), pinned:
+    UVLO reset after 743 s; VBAT 4.2-4.4 V steady with a transient sample at
+    3.421 V - right at the pm8941 lockout threshold
+  real phone, 4 cores at ~1.9 GHz average:
+    60 s clean at 82 C, VBAT steady just under 4.0 V
+
+  Same SoC, same speed bin, roughly six times the aggregate clock on the phone.
+  The rig fails at the lowest operating point the silicon has, while the phone
+  is fine at the highest. Every reset on the rig during the ceiling search
+  reported poff=0x2000 (UVLO) - at 1497.6, 883.2, 422.4 and 300 MHz alike.
+
+  A battery is a low-impedance buffer; the carrier feeds VBAT directly. Since
+  the rig's steady-state voltage is healthy and only transients reach lockout,
+  the signature points at feed impedance (wiring, connector, insufficient bulk
+  capacitance) rather than an average-power limit.
+
+  Caveat, stated deliberately: the phone runs the vendor 3.4 kernel, so this
+  compares platform-and-supply, not kernel-versus-kernel. Flashing 6.16 and
+  then 6.18 onto this phone is what isolates the kernel, and it is the next
+  measurement.
