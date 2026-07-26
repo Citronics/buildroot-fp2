@@ -408,3 +408,55 @@ SoC has never entered VDD-min, and the flagged risk of touching RPM code RAM at
 `0xfc190000` through that driver did not materialise. Battery rail 4.397 V idle,
 calibrated against the ADC's own references. Boot reason `pon=0x80` (KPD), a
 clean cold start with no prior reset.
+
+## The PMIC named it: UVLO at vendor voltages, 2026-07-26
+
+Measured on `6.18.40-...-gaa55b1b242a1` — the kernel with all sixteen changes,
+i.e. **no rail margin at all**, Android's exact fourteen operating points with a
+300 MHz floor, CX graded by rate on the active-only domain, and the ten SPM and
+Krait clock fixes. Four-core `stress-ng` on the full range reset the board after
+roughly 40 seconds, and this time the PMIC said what happened:
+
+```
+pon_reason=0x02  warm_reset=0x0002  poff=0x2000  poff_bits: UVLO
+verdict=BROWNOUT (PMIC undervoltage lockout)
+```
+
+Supporting facts from the same boot: `bootstatus = 0`, so **not** an APCS
+watchdog bite — a question that could not even be asked before
+`CONFIG_WATCHDOG_SYSFS` was enabled. Temperatures were 68–90 °C, far from any
+trip. No panic, no kernel output.
+
+UVLO is a statement about the PMIC's **input** rail, not about the Krait core
+voltage. It fires when VPH_PWR crosses the lockout threshold, around
+3.4–3.5 V. Steady-state VBAT measured 4.35–4.40 V idle and 4.24–4.30 V under
+load, so the collapse must be a fast transient that a few-Hz ADC cannot see.
+
+What this rules out, and it is a lot:
+
+- **Not the voltage table.** This kernel commands exactly the fused PVS values,
+  the same ones Android uses, and CPR is not enabled on this SoC so those values
+  are meant to be used as-is. Adding margin made it *worse* (200 mV: 39 s, also
+  UVLO); removing it entirely still browns out. Voltage magnitude is not the
+  lever in either direction.
+- **Not the OPP set.** The exposed rungs are now Android's, verified on the
+  shipped DTB.
+- **Not the watchdog**, not thermal, not a panic.
+
+What it points at is total power draw. Corroborating: the 6.16 baseline runs for
+hours on this same board, but it has no CPU DVFS — cpu0 sits at 960 MHz and
+cores 1-3 run off the aux mux near 600 MHz, roughly 2.8 GHz aggregate against
+the 4×1728 MHz this soak reached. And this rig is a Fairphone 2 motherboard on a
+carrier with **no battery**: VBAT is fed directly, so there is no cell impedance
+to absorb a current step. On a phone, the battery is exactly what does that job.
+
+Two UVLO events now, at opposite ends of the voltage range, are the first
+mechanism-level evidence in this investigation. The discriminator is current, so
+the next measurement varies only that: `msm8974-load-scale-mtbf` pins the
+frequency at 1728 MHz and runs 1, then 2, then 4 loaded cores for ten minutes
+each, logging calibrated VBAT throughout. If one and two cores survive where
+four browns out, current draw is confirmed and the fix is a power-delivery one -
+bulk capacitance, a lower-impedance feed, or a battery - with a frequency or
+core cap as the software-side mitigation. If all three brown out alike, current
+is exonerated and the remaining candidates are the unscaled L2 rate and the
+unprogrammed APC power-gate mode.
