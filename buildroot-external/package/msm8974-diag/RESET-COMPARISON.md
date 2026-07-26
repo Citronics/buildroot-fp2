@@ -501,12 +501,55 @@ per-core bus-event rates (the concurrency dose–response), and Android
 immune because its kernel never makes the offending access (it arms XPU
 err-fatal deliberately and lives).
 
-**The decisive next experiment (option 3, one build):** call the vendor's
-`TZ_XPU_VIOLATION_ERR_FATAL` SCM interface at boot to demote violations
-from fatal-reset to logged/noop. If the resets stop, the mechanism is
-confirmed — and the violation log then carries the **offending address**,
-which names the subsystem, which is the root cause. RAM-bootable test
-kernel; verdict in minutes on either board.
+**The decisive next experiment (option 3, one build) — interface now pinned
+down exactly.** Vendor `arch/arm/mach-msm/scm-xpu.c`: SCM service
+`SCM_SVC_MP = 0xC`, command `XPU_ERR_FATAL = 0xe`, config
+`ENABLE=0x0 / DISABLE=0x1 / READ=0x2`, command buffer `{u32 config; u32
+spare}`, u32 response. **The vendor ENABLES XPU-fatal at early_initcall** — so
+Android's stability means it *never makes the forbidden access*, and our reset
+means we do. Build the phone's exact kernel (86d3fa288686, clean rc config) +
+a qcom_scm wrapper for this call, cmdline-gated (`qcom_scm.xpu_errfatal=`,
+default unset = unchanged boot). Deploy via the extlinux swap. Sequence: READ
+(=2, confirms the interface + current state, safe) → DISABLE (=1) + W4 load.
+Survives ⇒ XPU-violation confirmed as the mechanism; then read TZ's violation
+log for the offending address → the driver → root cause. If the interface
+isn't honored, fall back to per-core-MMIO DT bisection (during pinned-load
+death DVFS is quiescent, so the bad access is in a hot generic path —
+tick/IPI/GIC).
+
+## 8. Tick-dose (NO_HZ_FULL), 2026-07-27
+
+Deployed a `CONFIG_NO_HZ_FULL=y` kernel (stock rc source + that flag) to the
+phone by swapping the extlinux kernel entry (no fastboot/RAM boot — that was a
+wrong mechanism; lk2nd→extlinux loads zImage from the boot partition). Booted
+clean, `nohz_full=1-3` active, network intact (USB gadget built-in).
+
+- **W4 pinned 300 MHz, cores 1-3 tickless: died at ~722 s uptime (~10 min).**
+  Versus stock W4 = 0.5-2 min across several runs, and W2 = ~8.5 min. So
+  removing the tick from 3 of 4 cores extended MTBF ~5-10×, to roughly the
+  2-core level. Same clean PS_HOLD. **Strong partial effect — the per-core
+  tick is a major contributor to the dice roll, not the sole one** (cpu0
+  still ticks; IPIs/coherency/RCU remain).
+- **Control (same binary, ticks ON, `nohz_full` removed): died at ~3.5 min.**
+  So the full ladder is: stock 0.5-2 min → rebuilt+ticks ~3.5 min → rebuilt
+  +tickless ~10 min.
+
+**Verdict: SUGGESTIVE, NOT CONVICTED — I over-read the 10 min while it was
+surviving.** Two effects, only one clean:
+1. **The rebuild is a real confound.** Both rebuilt kernels outlived every
+   stock run (which never passed ~2 min in ≥4 tries), *before* nohz enters.
+   Some olddefconfig delta (or scatter) extends MTBF on its own, so the
+   tickless number can only be read against its own control, not stock.
+2. **Tickless (10 min) vs control (3.5 min) is ~3× in the right direction —
+   but single samples against a process with ~10× scatter** (identical
+   configs have landed 30 s … 35 min). A 3× one-shot gap does not survive
+   that noise.
+The tick MIGHT contribute, but this cannot prove it. Settling it needs **≥3
+replicates per arm** (tickless vs ticks-on, same binary) to separate signal
+from scatter — ~1 h of babysat soaks — or, better, skip straight to the
+address-naming experiment (§7, XPU-demote), which is decisive in one build
+regardless of the tick question. Stock kernel restored on the phone after
+the run.
 
 ## Update log
 
