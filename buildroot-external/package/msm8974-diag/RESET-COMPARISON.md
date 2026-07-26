@@ -365,6 +365,46 @@ the verdict:
 5. **Only then design the fix** on whichever of S1–S4 the ladder, the
    discriminator and the PS_HOLD-actor analysis convict.
 
+## 6. The warm-reset era (2026-07-26 late evening)
+
+The PS_HOLD-actor analysis (audits file, report 4) landed three corrections
+that were applied on the device the same evening:
+
+- **Correction of our own forensics:** PM8941 is PON **gen1** — it has no
+  `FAULT_REASON` registers, so the earlier "FAULT_REASON=0x00" reads were
+  vacuous. The PMIC-side exclusion still holds via `POFF_REASON` itself
+  (only the PS_HOLD bit ever sets; PMIC_WD/TFT/UVLO/OTST3/STAGE3 all clear).
+- **Every reset until now was a PMIC hard reset** (`PS_HOLD_RST_CTL=7`, full
+  rail cycle — lk2nd's setting), which by itself explains every failed
+  ramoops attempt. The PMIC is now latched to **warm reset** (`085a: 01`,
+  survives lk2nd and spontaneous deaths; a systemd unit keeps controlled
+  reboots warm). Post-warm-death boots print **no PON line at all** — the
+  rails now stay up through the deaths.
+- **pstore/ramoops is closed permanently under lk2nd**: a pmsg canary was
+  lost across a *verified* warm reset from both 0x0ff00000 and lk2nd's own
+  scratch region 0x30f80000 — lk2nd/SBL reinitializes DDR on every boot
+  path. (Android's working ramoops ran under the signed aboot.) All earlier
+  "ramoops dead end" results are hereby explained: hard resets wiped DDR by
+  construction; warm resets die to the bootloader's DDR reinit.
+- **The TZ diag table is TZ-protected**: the readable IMEM window
+  (0x720–0x7ff) holds a "TZDI" descriptor, four advancing per-CPU counters
+  (0x738–0x744) and a small resetting counter (0x75c); the table proper at
+  0xfe806000 **stalls HLOS reads** (reader wedges in D-state; the widened
+  syscon window was reverted — do not re-widen). `reset_type` is not
+  reachable from Linux on this firmware.
+- **A hang cannot reset this SoC** (`WDT_EN=0`, nothing armed): the actor
+  acts *proactively*. Remaining candidates: RPM `ERR_FATAL` on a rail/corner
+  vote (best structural fit — and our `VDDCX_AO` + rate-graded corner votes
+  are new in this fork), TZ `err_fatal` on a bus event (the `/dev/mem`
+  family), a CX/MX-internal brownout, or a TZ-owned secure watchdog.
+
+**Now running:** the idle SPC-off A/B (2 h, `state1/disable=1` verified and
+logged every sample) against the 325–2132 s idle baseline — with warm reset
+this now discriminates cleanly. Next avenues, in value order: an RPM-stats +
+CX-corner fsync'd trace to catch a frozen RPM; a serial console on the
+phone's UART for SBL/TZ warm-boot banners; a small module for the XPU
+err-fatal SMC query.
+
 ## Update log
 
 - **2026-07-26** — Created. Rig column complete (all resets UVLO, including at

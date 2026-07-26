@@ -549,3 +549,74 @@ peaked at 70 °C]; why the live `clk_summary` shows 307.2 MHz from
 clock/DVFS/regulator stack (`devfreq_msm_cpufreq_update_bw` — CPU→DDR
 bandwidth voting — is a third thing the vendor drives from the same max index
 and we do not drive at all).
+
+---
+
+## Report 4 — what can assert PS_HOLD on MSM8974 (the reset actor)
+
+Delivered after the day's field data (death table, watchdog inactive,
+FTS-mode refuted). Three headline corrections, then the ranked actors.
+
+### Corrections that change how the evidence reads
+
+1. **PM8941 has no FAULT_REASON register — the earlier `0x00` read was
+   vacuous.** PON gen1 (PM8941, subtype 0x01) has `SOFT_RESET_REASON1/2` at
+   0x80E/0x80F; `FAULT_REASON1/2` (0x8C8/0x8C9) exist only on PON gen2
+   (PMI8994+), per the vendor's `is_pon_gen1()` gating in `qpnp-power-on.c`.
+   **The PMIC-side exclusion still holds, by POFF_REASON itself**: PMIC_WD
+   (bit2), TFT (12), UVLO (13), OTST3 (14), STAGE3 (15) are all clear; only
+   PS_HOLD (bit1) is ever set.
+
+2. **Every reset until 2026-07-26 evening was a PMIC *hard* reset** —
+   lk2nd's reboot path programs `PON_PS_HOLD_RST_CTL (0x85A) = 7`
+   (hard reset: full rail cycle), and mainline `pm8941_reboot_notify()`
+   writes 7 unless `reboot_mode == warm`. A hard reset cuts DDR *and* IMEM —
+   a complete, mundane explanation for every failed ramoops attempt.
+   FP2's own Android uses **warm reset for every reboot** (`restart.c:277`,
+   the hard branch is dead code). *Field follow-up: type 1 was latched via
+   `echo warm > /sys/kernel/reboot/mode` + reboot, verified to persist
+   across lk2nd and across spontaneous deaths (`085a: 01`, `085b: 80`), and
+   post-warm-death boots print no PON line at all — the rails now stay up
+   through the deaths.*
+
+3. **A TZ diag region exists at IMEM+0x720** (`qcom,tz-log@fe805720` in the
+   vendor DT, layout in `tz_log.c`: header, per-CPU `boot_info[]`,
+   `reset_info[] = {reset_type, reset_cnt}`, `int_info[]`, log ring).
+   *Field follow-up: on this firmware the readable 0x720–0x7ff window holds
+   a descriptor ("TZDI" tag, table pointer 0xfe806000, plus four advancing
+   per-CPU counters at 0x738–0x744 and a small resetting counter at 0x75c) —
+   and the table itself at 0xfe806000+ is TZ-protected: HLOS reads STALL
+   (the reader wedges in D-state until reboot; widening the syscon window is
+   a trap, reverted). `reset_type` is therefore not reachable from Linux on
+   this firmware.*
+
+### Ranked PS_HOLD actors
+
+| # | Mechanism | Verdict on the evidence |
+|---|---|---|
+| 1 | **RPM `ERR_FATAL`** on an invalid/unsatisfiable rail or corner vote (`CORE_VERIFY` aborts: corner out of range, corner/level mixing, the Mx ≥ all-rails invariant, rail-settle timeout) → RPM abort → TZ → PS_HOLD, in µs–ms with zero console output | **Best structural fit**; rate ∝ RPM message traffic. Note the fork's `MSM8974_VDDCX_AO` + rate-graded corner changes are exactly the kind of vote pattern this punishes. Not yet tied to the pinned-load case (no rate changes ⇒ no corner votes in steady state) — needs the RPM-stats trap. |
+| 2 | **TZ `err_fatal` on a bus/permission event** (XPU violation, AHB timeout, NOC/BIMC error) — the same family as the known `/dev/mem` instant reset | Fully consistent; probability per bus transaction scales with activity. |
+| 3 | **SoC-internal rail brownout (CX/MX/APC)** releasing PS_HOLD with no software actor — recorded as PS_HOLD, never UVLO (UVLO watches VPH only) | The one candidate needing no actor; survives the FTS→PWM null (the failing rail would be CX/MX, not APC). |
+| 4 | **Secure (TZ-owned) watchdog** — SBL-armed, TZ-petted, invisible to Linux; bite asserts PS_HOLD | Possible; fixed timeout fits a load-proportional MTBF poorly. |
+| 5 | APSS/KPSS watchdog | **EXCLUDED**: `WDT_EN=0` at probe (state `inactive`), lk2nd ≥18.0 explicitly disables it, nothing arms it. **Corollary: a plain hang cannot reset this SoC — the actor acts proactively.** |
+| 6 | PMIC-side (PMIC WD, OTST3, STAGE3, TFT, UVLO, keys) | **EXCLUDED** by POFF_REASON bits. PM8941 stage-3 is 160 °C (not 145); PM8841 stage-2 auto-shutdown at 140 °C stays armed and its PON block is undeclared in mainline DT — worth adding, low priority. |
+| 7 | Krait timing failure as a direct reset | **EXCLUDED as direct** (produces a hang/abort, not a reset; watchdog off ⇒ nothing terminal). Survives only as a feeder into #2. |
+| 8 | Stray software PS_HOLD write (`msm-poweroff`) | Near-excluded (an orderly path prints and writes the reboot-mode cookie; the cookie is always empty). |
+
+### The forensic channel outcome (field addendum)
+
+The recommended measurement — flip to warm reset, harvest pstore + TZ diag —
+was executed the same evening. Warm reset latched and held. **pstore/ramoops
+is closed permanently under lk2nd**: a pmsg canary written pre-reboot was
+lost across a *verified* warm reset from both candidate regions
+(0x0ff00000 and lk2nd's own scratch 0x30f80000) — lk2nd/SBL reinitializes
+DDR on every path (Android's working ramoops ran under the signed aboot).
+The TZ diag table is TZ-protected past 0xfe806000. What warm reset *does*
+preserve: the SoC/PMIC state itself (no PON re-latch, IMEM counters
+accumulate), and it removes the rail cycle from every future death.
+
+Remaining actor-identification avenues, in value order: (a) SPC-off idle A/B
+(running — discriminates collapse for the idle deaths); (b) an RPM-stats +
+CX-corner 5 Hz fsync'd trace to catch a frozen RPM (actor #1); (c) a serial
+console on the phone's UART for SBL/TZ warm-boot banners; (d) a tiny kernel
+module for the `TZ_XPU_VIOLATION_ERR_FATAL_NOOP` SMC query (actor #2).
