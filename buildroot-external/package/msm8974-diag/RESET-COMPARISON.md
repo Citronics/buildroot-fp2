@@ -398,12 +398,30 @@ that were applied on the device the same evening:
   are new in this fork), TZ `err_fatal` on a bus event (the `/dev/mem`
   family), a CX/MX-internal brownout, or a TZ-owned secure watchdog.
 
-**Now running:** the idle SPC-off A/B (2 h, `state1/disable=1` verified and
-logged every sample) against the 325–2132 s idle baseline — with warm reset
-this now discriminates cleanly. Next avenues, in value order: an RPM-stats +
-CX-corner fsync'd trace to catch a frozen RPM; a serial console on the
-phone's UART for SBL/TZ warm-boot banners; a small module for the XPU
-err-fatal SMC query.
+**The idle SPC-off A/B verdict (same night): power collapse is EXONERATED
+entirely.** With `state1/disable=1` on all four cores — counters provably
+frozen at their start values in every fsync'd sample — the idle phone died at
+~1700 s of test time (~2778 s uptime), inside the normal idle-death scatter.
+Combined with the load deaths (collapse barely exercised under busy loops),
+deep sleep is ruled out for both death modes. One correction from this run:
+"post-warm-death boots print no PON line" was a dmesg-rotation artifact —
+the line reappears (stale PS_HOLD on gen1 persists); rails staying up is
+still established by the canary/latch checks, not by the missing line.
+
+**The surviving profile** — kills idle in 5–56 min and load in 0.5–2 min, at
+any frequency, correct voltage, benign temperature, no sleep states involved,
+proactive actor — points at something per-transaction. Leading family:
+**a periodic MMIO/bus access that occasionally stalls → TZ AHB/NOC
+`err_fatal` → PS_HOLD.** It fits the ~10–30× idle-vs-load rate ratio (tick
+and register traffic scale with activity), the frequency/voltage
+independence, the silence, and Android's immunity (a clock/path the vendor
+keeps enabled that we gate would do it). Discriminator running: the MMIO
+hammer (`mmio-hammer.py`) — one core reading a known-safe device register
+~10⁶/s on an otherwise idle system, versus an identical pure-arithmetic spin
+as control. Bus family predicts the hammer dies on load-like timescales and
+the spin does not. Next after that, in value order: an RPM-stats fsync'd
+trace (frozen counters = RPM abort), a serial console for SBL/TZ warm-boot
+banners, the XPU err-fatal SMC query via a small module.
 
 ## Update log
 
