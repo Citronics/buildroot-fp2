@@ -1,0 +1,258 @@
+=== msm8974 pre-soak check, kernel 6.16.12-msm8974-citronics-lime-fp2, uptime 299.90s
+
+--- 1. Did the CX corner vote actually arrive?
+    rpmpd_set_performance() returns 0 without sending anything when the
+    domain is not enabled, so a failure is invisible in dmesg. Want: cx on,
+    performance state 6 at a high OPP, four devices attached.
+domain                          status          children        performance
+oxilicx                         on                              0
+                                                oxilicx
+cx_vfc                          off-0                           0
+cx_ao                           off-0                           0
+cx                              off-0                           0
+
+--- 2. Is AVS live behind the driver's back?
+    Any enable bit set means the hardware may have been tracking the rail
+    down on its own, which no voltage margin can compensate for.
+    L2  AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000000 seq_armed=no
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00010003 (vlvl 0x03, port 1)
+    cpu0 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000001 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+    cpu1 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000031 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+    cpu2 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000031 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+    cpu3 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000031 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+
+--- 3. Per-core APC state, and the KPSS version that decides which
+    registers matter. Mainline never touches CPU0: if it is not in the
+    same BHS state as 1-3, its voltage comes from APC_LDO_VREF_SET, a
+    register this kernel never writes.
+    KPSS VERSION = 0x20010000  -> > 0x20000000: PWR_GATE_MODE/DLY are the registers that decide the mode
+    cpu0 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x0000003f DLY=0x00000000
+    cpu1 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x00000000 DLY=0x00000000
+    cpu2 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x00000000 DLY=0x00000000
+    cpu3 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x00000000 DLY=0x00000000
+
+--- 4. What rate is the L2 actually running, and the FTS2 phase/mode.
+    The vendor keys the CX corner off the L2 rate; this kernel never sets
+    or reads it. Nothing here manages phases or PWM-vs-PFM either.
+
+--- 5. Was the previous reset a watchdog bite? (needs CONFIG_WATCHDOG_SYSFS)
+    bootstatus absent - CONFIG_WATCHDOG_SYSFS is not enabled in this build,
+    so 'was this a watchdog bite' cannot be asked. A bite is byte-identical
+    to a reboot at the PMIC, so nothing else can answer it.
+
+--- 6. Persistent-RAM logging
+    no pstore support in this kernel (CONFIG_PSTORE absent)
+
+--- 7. RPM's own view (driver-mediated, safe - never /dev/mem here)
+    APSS:
+      APSS:
+      	Last shutdown @ 0
+      	Last bringup req @ 0
+      	Last bringup ack @ 0
+      	Last wakeup idx: 0
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 0
+      	Last wake transition duration: 0
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 0
+      	Active cores bitmask: 0x1
+    MPSS:
+      MPSS:
+      	Last shutdown @ 6049477988
+      	Last bringup req @ 6049160424
+      	Last bringup ack @ 6049160489
+      	Last wakeup idx: 6049160276
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 11139
+      	Last wake transition duration: 13843
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 486
+      	Active cores bitmask: 0x0
+    LPSS:
+      LPSS:
+      	Last shutdown @ 1280090212
+      	Last bringup req @ 1280068266
+      	Last bringup ack @ 1280072050
+      	Last wakeup idx: 1280033548
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 4317
+      	Last wake transition duration: 1145
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 48
+      	Active cores bitmask: 0x0
+    PRONTO:
+      PRONTO:
+      	Last shutdown @ 4778880237
+      	Last bringup req @ 4778824766
+      	Last bringup ack @ 4778824831
+      	Last wakeup idx: 4778824581
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 7576
+      	Last wake transition duration: 17002
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 30
+      	Active cores bitmask: 0x0
+    vmin:
+      Count: 0
+      Last Entered At: 0
+      Last Exited At: 0
+      Accumulated Duration: 0
+      Client Votes: 0x0
+
+--- 8. Previous power-off reason
+pon_reason=0x80 warm_reset=0x0000 poff=0x0000 poff_bits: none verdict=inconclusive
+
+--- 9. Battery rail, calibrated against the ADC's own references
+    counts/mV=10.232 (from the 625/1250 mV refs, GND=24702)
+    VBAT = 4.390 V   (raw 39676; dividing a raw code by 10000 is WRONG)
+
+saved to /home/citro/preflight-541146e5.txt
+=== msm8974 pre-soak check, kernel 6.16.12-msm8974-citronics-lime-fp2, uptime 321.09s
+
+--- 1. Did the CX corner vote actually arrive?
+    rpmpd_set_performance() returns 0 without sending anything when the
+    domain is not enabled, so a failure is invisible in dmesg. Want: cx on,
+    performance state 6 at a high OPP, four devices attached.
+domain                          status          children        performance
+oxilicx                         on                              0
+                                                oxilicx
+cx_vfc                          off-0                           0
+cx_ao                           off-0                           0
+cx                              off-0                           0
+
+--- 2. Is AVS live behind the driver's back?
+    Any enable bit set means the hardware may have been tracking the rail
+    down on its own, which no voltage margin can compensate for.
+    L2  AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000000 seq_armed=no
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00010003 (vlvl 0x03, port 1)
+    cpu0 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000001 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+    cpu1 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000031 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+    cpu2 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000031 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+    cpu3 AVS_CTL=0x00000000 (off)              AVS_LIMIT=0x00000000  SPM_CTL=0x00000031 seq_armed=yes
+        PMIC_STS=0x00 -> 0 mV    VCTL=0x00000000 (vlvl 0x00, port 0)
+
+--- 3. Per-core APC state, and the KPSS version that decides which
+    registers matter. Mainline never touches CPU0: if it is not in the
+    same BHS state as 1-3, its voltage comes from APC_LDO_VREF_SET, a
+    register this kernel never writes.
+    KPSS VERSION = 0x20010000  -> > 0x20000000: PWR_GATE_MODE/DLY are the registers that decide the mode
+    cpu0 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x0000003f DLY=0x00000000
+    cpu1 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x00000000 DLY=0x00000000
+    cpu2 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x00000000 DLY=0x00000000
+    cpu3 PWR_GATE_CTL=0x403f3f7f BHS_EN=1 SEG=0x3f LDO_BYP=0x3f LDO_PWR_DWN=0x3f
+         MODE=0x00000000 switch=PC  VREF=0x00000000 DLY=0x00000000
+
+--- 4. What rate is the L2 actually running, and the FTS2 phase/mode.
+    The vendor keys the CX corner off the L2 rate; this kernel never sets
+    or reads it. Nothing here manages phases or PWM-vs-PFM either.
+
+--- 5. Was the previous reset a watchdog bite? (needs CONFIG_WATCHDOG_SYSFS)
+    bootstatus absent - CONFIG_WATCHDOG_SYSFS is not enabled in this build,
+    so 'was this a watchdog bite' cannot be asked. A bite is byte-identical
+    to a reboot at the PMIC, so nothing else can answer it.
+
+--- 6. Persistent-RAM logging
+    no pstore support in this kernel (CONFIG_PSTORE absent)
+
+--- 7. RPM's own view (driver-mediated, safe - never /dev/mem here)
+    APSS:
+      APSS:
+      	Last shutdown @ 0
+      	Last bringup req @ 0
+      	Last bringup ack @ 0
+      	Last wakeup idx: 0
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 0
+      	Last wake transition duration: 0
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 0
+      	Active cores bitmask: 0x1
+    MPSS:
+      MPSS:
+      	Last shutdown @ 6454981350
+      	Last bringup req @ 6454664030
+      	Last bringup ack @ 6454664096
+      	Last wakeup idx: 6454663882
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 11148
+      	Last wake transition duration: 13838
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 520
+      	Active cores bitmask: 0x0
+    LPSS:
+      LPSS:
+      	Last shutdown @ 1280090212
+      	Last bringup req @ 1280068266
+      	Last bringup ack @ 1280072050
+      	Last wakeup idx: 1280033548
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 4317
+      	Last wake transition duration: 1145
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 48
+      	Active cores bitmask: 0x0
+    PRONTO:
+      PRONTO:
+      	Last shutdown @ 6392407127
+      	Last bringup req @ 6354821980
+      	Last bringup ack @ 6354840810
+      	Last wakeup idx: 4778824581
+      	Last XO shutdown enter @ 0
+      	Last XO shutdown exit @ 0
+      	XO total duration: 0
+      	Last sleep transition duration: 7575
+      	Last wake transition duration: 16983
+      	XO shutdown count: 0
+      	Wakeup reason: 0x0
+      	Shutdown count: 33
+      	Active cores bitmask: 0x0
+    vmin:
+      Count: 0
+      Last Entered At: 0
+      Last Exited At: 0
+      Accumulated Duration: 0
+      Client Votes: 0x0
+
+--- 8. Previous power-off reason
+pon_reason=0x80 warm_reset=0x0000 poff=0x0000 poff_bits: none verdict=inconclusive
+
+--- 9. Battery rail, calibrated against the ADC's own references
+    counts/mV=10.234 (from the 625/1250 mV refs, GND=24703)
+    VBAT = 4.397 V   (raw 39702; dividing a raw code by 10000 is WRONG)
+
+saved to /home/citro/preflight-541146e5.txt

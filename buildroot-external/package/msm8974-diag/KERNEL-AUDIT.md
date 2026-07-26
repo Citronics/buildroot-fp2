@@ -324,3 +324,46 @@ RPM MSG RAM — see RESET-FORENSICS.md):
 | `0xf9089004` bit 2 (+`0x10000*n`) | per-CPU `SAW2_ID` PMIC-arbiter present — if clear, the P3 mechanism is inert |
 | `0xf9089014` (+`0x10000*n`) | per-CPU `PMIC_STS` — a nonzero `CURR_VLVL` means a per-CPU SAW has driven the PMIC |
 | `0xf9012030` bit 0 | confirms probe armed the L2 sequencer (expect set) |
+
+## Baseline readings from the stable 6.16 kernel (2026-07-26)
+
+Taken with `msm8974-preflight` on the freshly reinstalled vanilla Ubuntu image
+running `6.16.12-msm8974-citronics-lime-fp2` — the configuration that soaks for
+8 h+ without a reset. Full output in `evidence/2026-07-26-preflight-6.16-baseline.txt`.
+Four of these settle open questions, and two of them cut against assumptions this
+fork was built on.
+
+**AVS is off on all five SAWs** (`AVS_CTL = 0` on the L2 and all four per-CPU
+SAWs). So the bootloader does not arm it, and the truncated-window hazard in the
+v2.1 setter was latent rather than live. The fix is hardening; it is not the
+cause of anything observed.
+
+**The CX domain is not voted at all on the stable kernel** — `pm_genpd_summary`
+shows `cx`, `cx_ao` and `cx_vfc` all `off-0`. The 6.16 baseline runs cpu0 at
+960 MHz off a locked HFPLL with CX sitting whereever RPM leaves it by default,
+for hours. That is worth keeping in mind before treating "CX starvation" as
+established: the reference configuration does not vote CX either. Our fork went
+from a graded vote, to a permanent super-turbo pin, and has now landed on a
+rate-graded vote — none of which the stable kernel does.
+
+**The L2 SAW sequencer is not armed on the stable kernel**: `SPM_CTL = 0` on the
+L2 SAW, `PMIC_STS = 0` (it is not driving the rail), and `VCTL = 0x00010003` —
+port 1, data 3, i.e. exactly the "enable max phases" write that
+`kpssv2_release_secondary()` leaves behind, never touched again. Our probe arms
+that sequencer with the vendor's retention sequence and then pokes `RST` from the
+cpufreq path. This is now a *measured* delta against the stable configuration,
+not an inferred one.
+
+**KPSS `VERSION` = `0x20010000`**, so it is above the `0x20000000` threshold: on
+this part `APC_PWR_GATE_MODE`/`APC_PWR_GATE_DLY` are the registers that decide
+the per-core power-switch mode, not `APC_PWR_GATE_CTL`. Both read **0** — mode
+field 0, which in the vendor's encoding is PC rather than BHS(2) — while
+`PWR_GATE_CTL = 0x403f3f7f` (BHS_EN set, all segments enabled, LDO bypassed).
+The vendor writes `MODE = 0x21` and `DLY = 0x30430600` here. The stable kernel
+shares the zeros, so zeros alone are survivable; what is untested is whether they
+remain survivable once the rail is being scaled.
+
+One asymmetry to note: **cpu0 has `LDO_VREF_SET = 0x3f` where cpu1-3 read 0.**
+With the LDO bypassed this should not affect the delivered voltage, but it is a
+real difference on the core mainline never "releases", and it is the kind of
+detail worth re-checking on the 6.18 image.
