@@ -367,3 +367,44 @@ One asymmetry to note: **cpu0 has `LDO_VREF_SET = 0x3f` where cpu1-3 read 0.**
 With the LDO bypassed this should not affect the delivered voltage, but it is a
 real difference on the core mainline never "releases", and it is the kind of
 detail worth re-checking on the 6.18 image.
+
+## Baseline measurements, 6.16 vanilla, 2026-07-26
+
+Taken with `msm8974-preflight` on the freshly reinstalled 6.16 image — i.e. the
+bootloader-provided state, with none of this fork's DVFS code running. Raw
+report in `evidence/2026-07-26-preflight-baseline-6.16.txt`. Four open questions
+close here.
+
+**AVS is off in hardware.** `AVS_CTL = 0x00000000` and `AVS_LIMIT = 0x00000000`
+on all five SAWs. So the bootloader does not arm AVS, and the truncated-window
+re-arm bug (S2) was **latent, not active** — worth fixing, which it now is, but
+it was never the trigger. One candidate retired.
+
+**KPSS VERSION = 0x20010000**, i.e. greater than `0x20000000`. This was the
+flagged unknown, and it matters: above that threshold the vendor stops using
+`APC_PWR_GATE_CTL` to select the head-switch mode and instead programs
+`APC_PWR_GATE_MODE = 0x21` and `APC_PWR_GATE_DLY = 0x30430600`. On this die both
+read **zero** on all four cores, so the mode field decodes as **PC**, not BHS,
+and the hardware sequencer is off. `APC_PWR_GATE_CTL` is `0x403f3f7f` on every
+core, which is exactly the vendor's final staged value — so the part mainline
+*does* write matches, and the part that actually governs the mode on this
+silicon is the part nobody writes. That makes the missing APC/MDD programming a
+concrete gap rather than a maybe.
+
+**CPU0 differs from its siblings**: `APC_LDO_VREF_SET = 0x3f` on cpu0 versus `0`
+on cpu1-3. CPU0 is the core mainline never touches (`kpssv2_release_secondary()`
+only handles secondaries), so this asymmetry comes from the bootloader.
+
+**The L2 SAW is untouched on the baseline**: `SPM_CTL = 0` (sequencer *not*
+armed), `PMIC_STS = 0` (never drives the rail), and `VCTL = 0x00010003` — port 1,
+data 3, which is precisely the "enable max phases" write from
+`kpssv2_release_secondary()` and the only thing that ever writes VCTL here. Our
+fork arms that sequencer at probe and then pokes `RST` from the voltage path, so
+S1 is confirmed as a real behavioural delta against the stable configuration,
+independent of whether it is the trigger.
+
+Also recorded: `qcom_stats` read `vmin` without incident — **Count: 0**, so this
+SoC has never entered VDD-min, and the flagged risk of touching RPM code RAM at
+`0xfc190000` through that driver did not materialise. Battery rail 4.397 V idle,
+calibrated against the ADC's own references. Boot reason `pon=0x80` (KPD), a
+clean cold start with no prior reset.
