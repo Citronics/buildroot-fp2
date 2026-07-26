@@ -458,6 +458,56 @@ been consumed. The remaining discriminators need either hardware or a build:
    each testable as single-variable kernel builds now that the harness and
    MTBF baselines exist to judge them quickly.
 
+## 7. The serial-console night (2026-07-26, rig bench established)
+
+Marc wired the FT232 to the carrier rig (UART = ttyMSM0 console, full getty).
+Everything below is in `evidence/rig-uart-0726-1731.log`, captured
+continuously.
+
+- **The rig is now a self-classifying test bench**: serial console at
+  loglevel 8, warm reset latched (`085a: 01`), continuous capture, and every
+  boot prints `pon=/warm_reset=/poff=` — each death auto-labels itself in
+  the same stream. **lk2nd's shell is reachable over serial** (key press in
+  the 10-s window), giving remote `md` (pre-kernel memory reads), `pstore`,
+  `printenv/setenv`, `fastboot`, and `boot` — full remote bench control with
+  no network and no buttons.
+- **The kernel bug REPRODUCED on the rig**: 4×300 MHz capped/powersave load
+  died in ~1 min — `poff=0x0000, warm_reset=0x0002` = a PS_HOLD **warm**
+  reset (no power-off occurred; in the warm era the reason latches in
+  WARM_RESET_REASON, POFF stays empty — UVLO deaths would still latch POFF,
+  so classification is unambiguous). Not the carrier's supply. Same bug,
+  both boards.
+- **Zero console output at the moment of death, at loglevel 8, on a live
+  serial console.** No panic, no stall, no fault, no precursor of any kind.
+  Linux is healthy to the last microsecond; the actor kills faster than any
+  detector fires.
+- **XPU err-fatal is armed on this platform — demonstrated live**: reading
+  `0xfe806000` (the TZ diag table) from the *bootloader* instantly reset the
+  SoC. The table is XPU-locked against all non-secure access — that
+  forensic door is closed permanently, but the demonstration doubles as a
+  calibration sample.
+- **The calibration matches the bug bit-for-bit**: the known-XPU reset and
+  the bug's death produce identical records (`pon=0x80 warm_reset=0x0002
+  poff=0x0000`), identical silence, identical warm path. Caveat kept: other
+  TZ-mediated fatals (RPM err_fatal) likely share this signature — this is
+  strong consistency with the **TZ err-fatal family**, not unique proof of
+  XPU specifically.
+
+**The convergent picture.** Every property now aligns with one mechanism:
+a **TZ-mediated err-fatal on a forbidden or erroneous bus access** —
+proactive (no watchdog needed), microsecond-fast (silent at loglevel 8),
+V/f/T-independent (a wrong address doesn't care), probability riding on
+per-core bus-event rates (the concurrency dose–response), and Android
+immune because its kernel never makes the offending access (it arms XPU
+err-fatal deliberately and lives).
+
+**The decisive next experiment (option 3, one build):** call the vendor's
+`TZ_XPU_VIOLATION_ERR_FATAL` SCM interface at boot to demote violations
+from fatal-reset to logged/noop. If the resets stop, the mechanism is
+confirmed — and the violation log then carries the **offending address**,
+which names the subsystem, which is the root cause. RAM-bootable test
+kernel; verdict in minutes on either board.
+
 ## Update log
 
 - **2026-07-26** — Created. Rig column complete (all resets UVLO, including at
