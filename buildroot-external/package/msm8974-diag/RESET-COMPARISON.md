@@ -173,6 +173,33 @@ progress as the baseline arm of an A/B (§5).
 - **ramoops / pstore forensics. DEAD END.** Neither our reserved region nor the
   bootloader's scratch region survives a warm reset on this SoC.
 
+## 3.5 Death table — phone, our 6.18 (`g86d3fa288686`, rc3.14 DTB)
+
+Every death: clean PS_HOLD, `bootstatus=0`, `FAULT_REASON1/2=0`, no console
+output.
+
+| configuration | outcome |
+|---|---|
+| unloaded rung sweep incl. 2265.6 MHz + register probes | no reset, 40+ min |
+| idle, DVFS free (conservative, mostly 300 MHz), instrumented | **reset at 2132 s** (35.5 min), 47 °C, rail 800 mV correct at last sample |
+| idle, pinned 300 MHz (after a 12 s aborted load) | **reset at ~325 s uptime** |
+| 4-core load, pinned **300 MHz** (pin verified, ladder rung 1) | **reset < 30 s** |
+| 4-core load, pinned **300 MHz** (replication, pin verified, rail watched: setpoint never moved, 54 °C, VBAT 4.20 V) | **reset at 90–120 s** |
+| 4-core load, pinned 1190.4 MHz (pin verified) | **reset < 30 s**, 65–70 °C |
+| 4-core load, DVFS free (earlier in the day) | reset 30–120 s |
+| 4-core load, pinned 300 MHz, **FTS commanded to PWM** (port-2 write verified still latched at t=30: `rail=640000/800000`) | **reset 30–60 s** — the PWM command changed nothing |
+
+Android reference on the same handset: 4 cores at 1.5–2.27 GHz, 82 °C —
+no reset (and years of product-level stability).
+
+**Reading of the table:** 4-core load ⇒ MTBF ≈ 0.5–2 min at *any* frequency
+(300 MHz kills like 1190.4); idle ⇒ MTBF ≈ 5–35 min. Both scatter widely — a
+statistical failure process, not a threshold. Load's few-hundred-mA draw at
+800 mV is trivial for a PWM-mode FTS and above a PFM-mode one's capability,
+so the FTS-mode hypothesis survives this table; a current-magnitude threshold
+does not. During the replication the SAW setpoint was sampled every second
+and never moved — no other writer drives port 0 under load.
+
 ## 4. The surviving hypotheses (reassessed 2026-07-26 afternoon)
 
 The reset is **SoC-initiated and clean**: PM8941 `FAULT_REASON1/2 = 0x00` (no
@@ -184,14 +211,20 @@ or was asked to. The discriminating observation across all admissible runs:
 and load barely exercises it at all.
 
 **S1 — rail droop under sustained load (electrical, in-spec setpoint).
-Promoted to top suspect.** Everything "proven" about the rail is about the
-*commanded* setpoint, unloaded (§3). If our FTS2 (pm8841 S2) configuration
-differs from the vendor's under load — regulator mode (PWM vs auto/PFM), phase
-count, or a sequencer-applied sleep mode never restored — the rail sags under
-4-core current, cores fail timing and hang, and something resets the SoC with
-exactly the observed clean forensics. Fits: load-kills/idle-clean, no PMIC
-fault, worse under more load. Test: survival-vs-current ladder (below); audit
-what the armed L2 SAW sequencer's `pmic_data[1]` mode write does.
+REFUTED as far as software can, 2026-07-26 evening.** The discriminator ran:
+all policies pinned to 300 MHz (no port-0 traffic), the vendor's own
+"FTS → PWM" command written to L2 SAW `VCTL` port 2 (single aligned 32-bit
+store; verified latched, and still latched at the t=30 s sample under load —
+`rail=640000/800000`), then the standard 4-worker load. **It died in the same
+30–60 s window as every unpoked run.** Caveat kept honestly: a latched `VCTL`
+proves the register write, not SPMI delivery — the vendor polls the PMIC FSM
+to confirm transmission, and if the PVC port is not enabled in this boot's
+SAW configuration the command may never have left the block. But combined
+with 4×300 MHz busy loops drawing only a few hundred mA at 800 mV — modest
+even for PFM — the mode/droop family is no longer credible as the primary
+cause. (The two earlier "failed poke" runs were a Python `mmap` signature
+bug — flags/prot swapped positionally yields a read-only mapping — not a bus
+restriction; recorded so nobody re-fights that.)
 
 **S2 — per-core power-switch/MDD configuration never programmed.** Vendor
 writes `PWR_GATE_MODE = 0x21`, `PWR_GATE_DLY = 0x30430600`,
@@ -353,3 +386,28 @@ the verdict:
   FAULT_REASON1/2 = 0x00, Linux watchdog inactive, IMEM reboot cookie empty —
   the PS_HOLD is deliberate and clean, actor unknown (S4). Plan revised: load
   ladder (survival vs current) replaces the idle SPC-off arm.
+- **2026-07-26, evening — S1 (FTS mode / droop) refuted by the PWM
+  discriminator**; death table §3.5 extended with two 300 MHz load deaths and
+  the PWM-latched death. Every DVFS-adjacent hypothesis is now measured-clean
+  or refuted: setpoint, voltage table, transitions, frequency, thermal,
+  supply, regulator mode. Death rate tracks *activity* (~10–30× between idle
+  and load) with wide scatter — a statistical process. **Critical path is now
+  identifying the PS_HOLD actor (S4)**: an IMEM diff trap is armed to
+  fingerprint the next spontaneous idle death, and the PS_HOLD-mechanism
+  analysis is being pulled in. The prepared parity fixes (sec-mux map, HFPLL
+  lock, local-timer-stop, APC config) stay queued behind the actor question.
+- **2026-07-26, the idle baseline died — inversion argument RETRACTED.** The
+  clean idle baseline (nothing else running, verified) reset at **t=2132 s**
+  (35.5 min): all cores 300 MHz, rail 800 mV = correct, 47 °C, VBAT 4.22 V,
+  SPC ~30/s per core — same clean PS_HOLD, `bootstatus=0`, last sample
+  fsync'd 30 s before death. So **idle dies too, ~30–60× slower than load**
+  (35 min vs 30–120 s). Consequences: the load/idle inversion used to demote
+  collapse in the previous entry is void; the TZ-concurrency hypothesis is
+  now *contradicted in direction* (it predicts idle — far more concurrent
+  collapse — dies faster, and it dies slower); the FTS-PFM hypothesis (S1)
+  *gains* — PFM tolerates idle current with occasional wake-inrush glitches
+  and fails quickly under sustained load, and Android (PWM forced whenever
+  >1 core online) is immune at any temperature. Note the rig showed the same
+  *pattern* (idle 17–25 min, load seconds-to-minutes) beneath its genuine
+  UVLO problem. The idle SPC-off arm is back on the menu as a follow-up A/B
+  against this 35-min baseline; ladder first (bigger expected effect).
