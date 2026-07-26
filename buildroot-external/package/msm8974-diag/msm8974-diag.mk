@@ -33,6 +33,8 @@ define MSM8974_DIAG_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/converge-validate.py $(TARGET_DIR)/usr/bin/msm8974-converge-validate
 	$(INSTALL) -D -m 0755 $(@D)/ceiling-sweep.sh $(TARGET_DIR)/usr/bin/msm8974-ceiling-sweep
 	$(INSTALL) -D -m 0755 $(@D)/load-cycle.sh    $(TARGET_DIR)/usr/bin/msm8974-load-cycle
+	# pre-soak read-only checks (correct decoders, written down once)
+	$(INSTALL) -D -m 0755 $(@D)/preflight-check.sh $(TARGET_DIR)/usr/bin/msm8974-preflight
 	# safety net: independent of whatever applies load
 	$(INSTALL) -D -m 0755 $(@D)/thermal-guard.sh $(TARGET_DIR)/usr/sbin/msm8974-thermal-guard
 	# deployment / safe-state helper
