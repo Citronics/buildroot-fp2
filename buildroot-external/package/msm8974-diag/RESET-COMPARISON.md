@@ -415,13 +415,48 @@ proactive actor — points at something per-transaction. Leading family:
 `err_fatal` → PS_HOLD.** It fits the ~10–30× idle-vs-load rate ratio (tick
 and register traffic scale with activity), the frequency/voltage
 independence, the silence, and Android's immunity (a clock/path the vendor
-keeps enabled that we gate would do it). Discriminator running: the MMIO
-hammer (`mmio-hammer.py`) — one core reading a known-safe device register
-~10⁶/s on an otherwise idle system, versus an identical pure-arithmetic spin
-as control. Bus family predicts the hammer dies on load-like timescales and
-the spin does not. Next after that, in value order: an RPM-stats fsync'd
-trace (frozen counters = RPM abort), a serial console for SBL/TZ warm-boot
-banners, the XPU err-fatal SMC query via a small module.
+keeps enabled that we gate would do it). **MMIO hammer verdict: SURVIVED** — 900 s, ~890 million reads of the SAW
+register at ~990 k/s, zero stalls, no reset. The generic "any MMIO access is
+a dice roll" hypothesis is refuted (this run did orders of magnitude more
+register traffic than any dying configuration); if a bus path stalls it is a
+*specific* one. The quieter, sharper result: this was also a
+**one-core-100 %-busy run and it survived 15 min**, while four busy cores
+die in 0.5–2 min. The kill rate appears to scale with the number of
+**concurrently executing cores**, not with activity per se (echoing the
+rig's old 2-cores-survived/4-cores-died pattern, inadmissible but rhyming).
+
+**Worker-ladder verdict: a graded dose–response, no sharp threshold.**
+At pinned 300 MHz: W=4 dies in 0.5–2 min (×2 runs), **W=2 died at ~8.5 min**,
+W=1 (the hammer run) survived its 15-min cap, idle (W=0) dies in 5–35 min
+with wide scatter. The death *rate* rises with the number of concurrently
+busy cores — the signature of a per-event probability whose event rate
+scales with concurrent execution (per-core ticks, IPIs, coherency traffic),
+not a qualitative state reached at some core count.
+
+**Two small closures from the same night:** the RPM sleep-stats angle is a
+dead end on this config (`qcom_stats` exposes only vmin/xosd and both are
+permanently zero — we never enter system sleep, so a freeze is
+unobservable); and the TZ word at IMEM `0x75c` **increments once per
+death** — it is a TZ-side reset counter, proving TZ observes/records every
+one of these resets even though the type field is unreachable.
+
+**Where this leaves the hunt.** Everything cheap and runtime-testable has
+been consumed. The remaining discriminators need either hardware or a build:
+1. **Serial console on the phone's UART** — SBL/lk2nd print on every warm
+   boot; a reset-reason banner would name the actor outright. (Hardware:
+   FP2 debug UART access.)
+2. **A small out-of-tree kernel module** (needs the linux-headers deb for
+   the running kernel): the `TZ_XPU_VIOLATION_ERR_FATAL_NOOP` SMC query
+   (is XPU err-fatal armed?), an RPM liveness ping (a benign re-vote per
+   second — its failure/latency profile before death implicates or clears
+   the RPM), and a `WDT_STS` read at the instant of a bark, if any.
+3. **Kernel-config bisection against Android's behavior envelope** — the
+   dose–response with concurrent cores plus Android's immunity on identical
+   silicon still says: some per-core-activity code path of ours does
+   something the vendor's never does. The audits' remaining parity gaps
+   (local-timer-stop, `PWR_GATE_CONFIG`/MODE/DLY, TERMINATE_PC lock) are
+   each testable as single-variable kernel builds now that the harness and
+   MTBF baselines exist to judge them quickly.
 
 ## Update log
 
