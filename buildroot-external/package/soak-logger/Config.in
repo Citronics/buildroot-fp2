@@ -1,0 +1,7 @@
+config BR2_PACKAGE_SOAK_LOGGER
+	bool "soak-logger"
+	help
+	  Unattended fsync'd telemetry sampler: one line every 30 s
+	  (uptime, load, per-policy CPU frequency, thermal zone temps)
+	  appended to /var/log/soak/. Starts at boot so a silent reset
+	  always leaves evidence of the state just before it.

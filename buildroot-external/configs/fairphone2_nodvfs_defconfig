@@ -31,6 +31,8 @@ BR2_LINUX_KERNEL_CUSTOM_REPO_URL="file:///var/home/marc/Projects/linux-msm8x74"
 BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="1a41629d475842fb5033a0a9ba61fdc9c84299b8"
 BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
 BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="$(BR2_EXTERNAL_CITRONICS_PATH)/board/fairphone2/linux.config"
+# BV-A variant: same tree, same config, DVFS drivers gated off via fragment
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CITRONICS_PATH)/board/fairphone2/linux-fragments/nodvfs.fragment"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="qcom/qcom-msm8974pro-fairphone-fp2-headless"
 BR2_LINUX_KERNEL_DTB_OVERLAY_SUPPORT=y

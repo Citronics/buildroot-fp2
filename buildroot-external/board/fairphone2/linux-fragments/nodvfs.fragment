@@ -1,0 +1,11 @@
+# BV-A: CPU DVFS gated off (PLAN-dvfs-thermal-fp2.md §6, CP1 control).
+# Identical tree and config otherwise; CPUs stay at the bootloader-set
+# frequency, no HFPLL reprogramming, no krait mux switching, no rail scaling.
+# This matches the shape postmarketOS ships for every msm8974 device
+# (pmaports config-postmarketos-qcom-msm8974.armv7).
+# Thermal monitoring stays enabled (tsens feeds telemetry; passive trips
+# cannot actuate without a cpufreq cooling device; critical trip shutdown
+# remains as safety backstop).
+# CONFIG_QCOM_HFPLL is not set
+# CONFIG_KRAITCC is not set
+# CONFIG_ARM_QCOM_CPUFREQ_NVMEM is not set
