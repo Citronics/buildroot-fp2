@@ -4,7 +4,10 @@
 # up to the last sample. Judge device state from these logs plus the next
 # boot's PON reason, never from "it looked fine".
 
-LOG_DIR=/var/log/soak
+# NOT /var/log: buildroot puts it on tmpfs, and the 2026-07-30 CP1 reset
+# proved the previous boot's samples evaporate with it. /root is on the
+# rootfs and survives.
+LOG_DIR=/root/soak
 INTERVAL=30
 
 mkdir -p "$LOG_DIR"
