@@ -35,7 +35,7 @@ D=$(vadc_dir)
 
 {
 	echo "# soak-logger start: boot_id=$BOOT_ID kernel=$(uname -r) epoch=$(date +%s)"
-	echo "# fields: epoch uptime_s load1 ph=phase cpufreq_khz(csv|nofreq) trans(csv|-) vbat_uV chg tzone_temps_mC(csv)"
+	echo "# fields: epoch uptime_s load1 ph=phase cpufreq_khz(csv|nofreq) trans(csv|-) vbat_uV chg pwrirq=N tzone_temps_mC(csv)"
 } >> "$LOG"
 
 while :; do
@@ -50,7 +50,10 @@ while :; do
 	vbat=$(cat "$D/in_voltage6_input" 2>/dev/null)
 	chg=$(cat /sys/class/power_supply/smbb-bif/status 2>/dev/null)
 	temps=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | tr '\n' ',')
-	echo "$(date +%s) $up $load ph=${ph:--} $freqs $trans ${vbat:--} ${chg:--} $temps" >> "$LOG"
+	# pwr_irq timeouts: canary for the persistent PMIC/power-path degradation
+	# that precedes the silent reset (see 2026-08-03 EXP-2 post-mortem)
+	pwrirq=$(dmesg | grep -c "pwr_irq for req" 2>/dev/null)
+	echo "$(date +%s) $up $load ph=${ph:--} $freqs $trans ${vbat:--} ${chg:--} pwrirq=${pwrirq:-0} $temps" >> "$LOG"
 	# busybox sync may lack per-file support; fall back to full sync
 	sync "$LOG" 2>/dev/null || sync
 	sleep $INTERVAL
