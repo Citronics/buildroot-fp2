@@ -29,7 +29,7 @@ BR2_LINUX_KERNEL_CUSTOM_REPO_URL="file:///var/home/marc/Projects/linux-msm8x74"
 # 015852295b26 = 6.12/int/d3: staging(D0+D1) + krait-cpufreq(D2+D3 DT) +
 # spm-gangrail(L2 SAW2 gang-rail regulator + PREEMPT-DISABLE around the write,
 # the root-cause fix for the per-transition PS_HOLD reset) + pon-reason(O2).
-BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="25d9f7b2ce9e"
+BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="f97cca4b2547"
 BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
 BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="$(BR2_EXTERNAL_CITRONICS_PATH)/board/fairphone2/linux-612.config"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
