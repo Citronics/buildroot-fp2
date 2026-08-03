@@ -35,7 +35,7 @@ D=$(vadc_dir)
 
 {
 	echo "# soak-logger start: boot_id=$BOOT_ID kernel=$(uname -r) epoch=$(date +%s)"
-	echo "# fields: epoch uptime_s load1 ph=phase cpufreq_khz(csv|nofreq) trans(csv|-) vbat_uV chg pwrirq=N tzone_temps_mC(csv)"
+	echo "# fields: epoch uptime_s load1 ph=phase cpufreq_khz(csv|nofreq) trans(csv|-) vbat_uV chg pwrirq=N chgirq=fast/gone/uvalid tzone_temps_mC(csv)"
 } >> "$LOG"
 
 while :; do
@@ -53,7 +53,14 @@ while :; do
 	# pwr_irq timeouts: canary for the persistent PMIC/power-path degradation
 	# that precedes the silent reset (see 2026-08-03 EXP-2 post-mortem)
 	pwrirq=$(dmesg | grep -c "pwr_irq for req" 2>/dev/null)
-	echo "$(date +%s) $up $load ph=${ph:--} $freqs $trans ${vbat:--} ${chg:--} pwrirq=${pwrirq:-0} $temps" >> "$LOG"
+	# charger-transition discriminator: counter movement in the final samples
+	# before a battery-signature (poff=0x2000) death implicates the charger
+	# state machine; static counters implicate physical battery contact
+	fast=$(awk '/chg-fast/  {print $2+$3+$4+$5}' /proc/interrupts 2>/dev/null)
+	gone=$(awk '/chg-gone/  {print $2+$3+$4+$5}' /proc/interrupts 2>/dev/null)
+	uval=$(awk '/usb-valid/ {print $2+$3+$4+$5}' /proc/interrupts 2>/dev/null)
+	chgirq="${fast:-?}/${gone:-?}/${uval:-?}"
+	echo "$(date +%s) $up $load ph=${ph:--} $freqs $trans ${vbat:--} ${chg:--} pwrirq=${pwrirq:-0} chgirq=${chgirq:--} $temps" >> "$LOG"
 	# busybox sync may lack per-file support; fall back to full sync
 	sync "$LOG" 2>/dev/null || sync
 	sleep $INTERVAL
