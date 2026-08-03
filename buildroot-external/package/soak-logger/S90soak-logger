@@ -11,6 +11,12 @@ case "$1" in
 	[ $? = 0 ] && echo "OK" || echo "FAIL"
 	;;
   stop)
+	# Orderly-shutdown marker: a soft `reboot` leaves the SAME PON signature
+	# (warm_reset=0x0002 poff=0x0002) as the silent PS_HOLD reset, so PON
+	# alone cannot tell them apart.  A boot whose BOOTS entry has no
+	# matching clean-stop line ended uncleanly.
+	echo "$(date +%s) clean-stop boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" >> /root/soak/BOOTS
+	sync /root/soak/BOOTS 2>/dev/null || sync
 	printf "Stopping soak-logger: "
 	start-stop-daemon -K -q -p $PIDFILE
 	[ $? = 0 ] && echo "OK" || echo "FAIL"
