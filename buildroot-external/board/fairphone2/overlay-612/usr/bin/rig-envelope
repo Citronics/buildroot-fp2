@@ -1,0 +1,383 @@
+#!/bin/sh
+# rig-envelope - supply-aware CPU envelope for the battery-less carrier rig.
+#
+# WHY THIS EXISTS
+# The rig feeds VPH from a current-limited 5 V source through wiring, with no
+# cell across the terminals.  A phone's pack absorbs load steps; here every
+# step lands on the source, and when VPH dips below the PMIC's UVLO the SoC
+# resets (PON afterwards reports "previous power-off: UVLO" / "power-on:
+# SMPL").  On 2026-08-04 the stock envelope could not even finish booting on
+# this fixture: 6/6 resets, first at 8.10 s on the WCNSS power-up step and,
+# with radios disabled, at 3.5-8.2 s while cpufreq onlined four cores and the
+# governor ramped them toward 960 MHz.
+#
+# The kernel cmdline (cpufreq.default_governor=powersave) covers the window
+# before userspace exists.  This service owns the envelope afterwards:
+#
+#   1. cap scaling_max_freq at RIG_MAX_KHZ and hand over to a real governor;
+#   2. watch VPH and step the cap DOWN when it sags, back up when it recovers.
+#
+# The cap is policy, not silicon: the device tree keeps the full OPP table, so
+# raising the ceiling here (or from the shell) needs no reflash.  652800 kHz is
+# the default because 300/422.4/652.8 MHz all share one rail voltage (800 mV)
+# on this speed bin, so the ceiling also eliminates every rail transition.
+
+CONF=/etc/rig-envelope.conf
+LOG=/root/soak/rig-envelope.log
+
+RIG_MAX_KHZ=652800		# working ceiling
+RIG_GOVERNOR=schedutil		# governor to hand over to
+RIG_VPH_LOW_UV=3450000		# below this, shed a step
+RIG_VPH_OK_UV=3700000		# above this for RIG_RECOVER samples, restore one
+RIG_POLL_S=1			# VPH sample period
+RIG_RECOVER=20			# consecutive good samples before restoring
+RIG_ALLOW_OFFLINE=0		# 1 = offline cores once at the lowest OPP
+RIG_TARGET_CPUS=4		# cores to reach after boot (rig boots with maxcpus=1)
+RIG_ONLINE_SETTLE_S=2		# settle time after onlining a core, before reading VPH
+RIG_ONLINE_STAGGER_S=3		# gap between cores, so steps never overlap
+RIG_ONLINE_MIN_UV=3550000	# refuse to online another core below this VPH
+# Sag trip as a percentage below the idle baseline.  MUST have a default: it was
+# referenced by the baseline-relative threshold code without one, and an unset
+# variable expands to 0 in shell arithmetic, which made the trip point equal to
+# the baseline itself.  The service then read 4.86 V as a sag, shed every step,
+# and pinned the rig at 300 MHz for a whole session before anyone noticed.
+RIG_SAG_PCT=8
+RIG_LOAD_RADIOS=0		# 1 = bring the remoteprocs up here, one at a time
+RIG_RADIO_MODULES=""		# load order, e.g. "qcom_q6v5_pas qcom_wcnss_pil"
+RIG_RADIO_SETTLE_S=8		# settle time between radios
+[ -r "$CONF" ] && . "$CONF"
+
+mkdir -p "$(dirname "$LOG")"
+
+log() {
+	echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$LOG"
+	sync "$LOG" 2>/dev/null || sync
+}
+
+# The charger's own input-collapse counter: hardware truth, and it arrives faster
+# than any ADC poll.  Needs debugfs, so mount it here rather than assuming a
+# distro did.
+mount | grep -q ' /sys/kernel/debug ' || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+
+collapse_count() {
+	c=$(grep -oE 'collapses [0-9]+' /sys/kernel/debug/*charger*/state 2>/dev/null | tail -1)
+	echo "${c##* }"
+}
+
+policies() {
+	for p in /sys/devices/system/cpu/cpufreq/policy*; do
+		[ -d "$p" ] && echo "$p"
+	done
+}
+
+# Ascending list of available frequencies, from the first policy that has one.
+freq_list() {
+	for p in $(policies); do
+		if [ -r "$p/scaling_available_frequencies" ]; then
+			tr ' ' '\n' < "$p/scaling_available_frequencies" |
+				grep -E '^[0-9]+$' | sort -n | tr '\n' ' '
+			return
+		fi
+	done
+}
+
+set_ceiling() {
+	want=$1
+	for p in $(policies); do
+		echo "$want" > "$p/scaling_max_freq" 2>/dev/null
+	done
+	got=$(cat "$(policies | head -1)/scaling_max_freq" 2>/dev/null)
+	[ "$got" = "$want" ] || log "WARN ceiling requested ${want} but reads ${got}"
+	CEILING=$got
+}
+
+set_governor() {
+	want=$1
+	for p in $(policies); do
+		if grep -qw "$want" "$p/scaling_available_governors" 2>/dev/null; then
+			echo "$want" > "$p/scaling_governor" 2>/dev/null
+		fi
+	done
+	log "governor now $(cat "$(policies | head -1)/scaling_governor" 2>/dev/null)"
+}
+
+# Supply-voltage source discovery, per rig mode.
+#
+# The fixture has two wiring modes and they do not share a monitor point:
+#
+#   debug  the phone USB port supplies power and USB networking, so the board
+#          runs off USB_IN and the battery pins are unfed.  VBAT_SNS then reads
+#          a meaningless ~0.83 V and USBIN is the node that sags when the port
+#          current-limits.
+#   host   the phone port is a USB host feeding a hub from the PMIC's OTG boost,
+#          while the rig's USB-PD supply feeds the battery pins.  Now USB_IN is
+#          dead and VBAT_SNS is the real feed voltage - and the OTG boost
+#          powering the hub is a LOAD on the same budget, not a source.
+#
+# The IADC is useless in both modes: its sense resistor is in the battery path,
+# which carries no current without a cell (measured raw 10/37 at scale 0.001).
+#
+# Units: the VADC exposes in_voltage*_input in MICROvolts (a 1.25 V reference
+# reads 1250195).  An earlier version assumed millivolts and so rejected every
+# channel, which is why this service logged "no usable VPH source" and ran blind.
+rig_mode() {
+	if [ "$(cat /sys/class/power_supply/smbb-usbin/online 2>/dev/null)" = 1 ]; then
+		echo debug
+	else
+		echo host
+	fi
+}
+
+find_vph_source() {
+	best=""; best_file=""; best_scale=1
+	for f in /sys/bus/iio/devices/iio:device*/in_voltage*_input \
+		 /sys/class/power_supply/*/voltage_now; do
+		[ -r "$f" ] || continue
+		v=$(cat "$f" 2>/dev/null)
+		case "$v" in ''|*[!0-9]*) continue ;; esac
+		if [ "$v" -gt 2500000 ] && [ "$v" -lt 5600000 ]; then
+			sc=1
+		elif [ "$v" -gt 2500 ] && [ "$v" -lt 5600 ]; then
+			sc=1000
+		else
+			continue
+		fi
+		uv=$((v * sc))
+		# Highest plausible reading wins: in debug mode that is USBIN, in host
+		# mode the fed battery node.  Either way it is the supply we care about.
+		if [ -z "$best" ] || [ "$uv" -gt "$best" ]; then
+			best=$uv; best_file=$f; best_scale=$sc
+		fi
+	done
+	[ -n "$best_file" ] || return 1
+	VPH_FILE=$best_file; VPH_SCALE=$best_scale
+	return 0
+}
+
+read_vph() {
+	v=$(cat "$VPH_FILE" 2>/dev/null)
+	case "$v" in ''|*[!0-9]*) echo ""; return ;; esac
+	echo $((v * VPH_SCALE))
+}
+
+FREQS=$(freq_list)
+if [ -z "$FREQS" ]; then
+	log "FATAL no cpufreq policies with an available-frequency list; envelope not applied"
+	exit 1
+fi
+log "boot: available frequencies: $FREQS"
+log "boot: PON said: $(dmesg | grep -o 'previous power-off: .*' | tail -1)"
+
+# Power-aware ceiling: the thermal governor bounds sustained multi-core load
+# today, but that is a side effect, not a guarantee - improve the cooling and
+# the input budget becomes the binding limit instead.  Derive the ceiling from
+# how many cores are actually online (see rig-envelope.conf for the arithmetic).
+cap_for_cores() {
+	case "$1" in
+	1) echo "$RIG_CAP_1CPU" ;;
+	2) echo "$RIG_CAP_2CPU" ;;
+	3) echo "$RIG_CAP_3CPU" ;;
+	*) echo "$RIG_CAP_4CPU" ;;
+	esac
+}
+
+online_count() {
+	grep -c '^processor' /proc/cpuinfo
+}
+
+apply_cap() {
+	want=$(cap_for_cores "$(online_count)")
+	[ -n "$RIG_MAX_KHZ" ] && [ "$want" -gt "$RIG_MAX_KHZ" ] && want=$RIG_MAX_KHZ
+	[ -n "$THROTTLE_CAP" ] && [ "$THROTTLE_CAP" -lt "$want" ] && want=$THROTTLE_CAP
+	[ "$want" = "$CEILING" ] && return
+	set_ceiling "$want"
+	log "ceiling now ${CEILING} kHz ($(online_count) cores online)"
+}
+
+CEILING=0
+THROTTLE_CAP=""
+apply_cap
+set_governor "$RIG_GOVERNOR"
+
+if ! find_vph_source; then
+	log "WARN no usable VPH source found; envelope is static at ${CEILING} kHz"
+	VPH_FILE=""
+else
+	log "mode=$(rig_mode) supply monitor: $VPH_FILE (scale x${VPH_SCALE}), now $(read_vph) uV"
+	# Trip points relative to the idle baseline, so the same policy works for a
+	# 5 V USB feed and for whatever voltage the PD supply is set to.  The
+	# absolute floors from the config remain as a backstop.
+	BASELINE=$(read_vph)
+	i=0
+	while [ $i -lt 4 ]; do
+		v=$(read_vph)
+		[ -n "$v" ] && [ "$v" -gt "$BASELINE" ] && BASELINE=$v
+		i=$((i + 1))
+		sleep 1
+	done
+	SAG_UV=$((BASELINE - BASELINE * RIG_SAG_PCT / 100))
+	OK_UV=$((BASELINE - BASELINE * RIG_SAG_PCT / 300))
+	[ "$SAG_UV" -lt "$RIG_VPH_LOW_UV" ] && SAG_UV=$RIG_VPH_LOW_UV
+	[ "$OK_UV" -lt "$RIG_VPH_OK_UV" ] && OK_UV=$RIG_VPH_OK_UV
+	RIG_VPH_LOW_UV=$SAG_UV
+	RIG_VPH_OK_UV=$OK_UV
+	log "baseline ${BASELINE}uV -> sag below ${RIG_VPH_LOW_UV}uV, recovered above ${RIG_VPH_OK_UV}uV"
+fi
+
+# Staged secondary-CPU bring-up.
+#
+# The rig boots with maxcpus=1 because onlining four cores at once is what
+# killed boot (UVLO at 7.6-8.3 s, right at cpufreq_online for CPU2/CPU3).  Add
+# them back one at a time here, with VPH recorded before and after each step,
+# so the log shows what each core actually costs instead of only whether we
+# survived.  Stop early - and say so - if a core costs more headroom than
+# RIG_ONLINE_MIN_UV leaves.
+online_cores() {
+	[ "$RIG_TARGET_CPUS" -le 1 ] && return
+	n=1
+	for c in 1 2 3; do
+		node=/sys/devices/system/cpu/cpu$c/online
+		[ -w "$node" ] || continue
+		[ "$n" -ge "$RIG_TARGET_CPUS" ] && break
+		before=$(read_vph)
+		if [ -n "$before" ] && [ "$before" -lt "$RIG_ONLINE_MIN_UV" ]; then
+			log "STOP not onlining cpu$c: vph=${before}uV already below ${RIG_ONLINE_MIN_UV}uV"
+			break
+		fi
+		echo 1 > "$node" 2>/dev/null
+		sleep "$RIG_ONLINE_SETTLE_S"
+		after=$(read_vph)
+		state=$(cat "$node" 2>/dev/null)
+		log "cpu$c online=${state} vph ${before}uV -> ${after}uV (ceiling ${CEILING}kHz)"
+		[ "$state" = 1 ] && n=$((n + 1))
+		apply_cap
+		sleep "$RIG_ONLINE_STAGGER_S"
+	done
+	log "cores online: $(grep -c '^processor' /proc/cpuinfo)"
+}
+online_cores
+
+# Sequenced radio bring-up.
+#
+# The rig cmdline blacklists these from udev autoload, because bringing all of
+# them up concurrently during the boot storm - on top of the cpufreq ramp - is
+# what this feed cannot carry (measured 2026-08-04: UVLO at 8.10 s on the WCNSS
+# power-up, and the port collapsing during boot).  Android sequences them too:
+# ADSP early, the modem from userspace PIL, WCNSS only when WiFi is enabled.
+#
+# Each module gets the supply measured before and after, so the log says what
+# every radio actually costs rather than only whether we survived it.
+load_radios() {
+	[ "$RIG_LOAD_RADIOS" = 1 ] || return
+	for m in $RIG_RADIO_MODULES; do
+		before=$(read_vph)
+		if [ -n "$before" ] && [ -n "$RIG_ONLINE_MIN_UV" ] &&
+		   [ "$before" -lt "$RIG_ONLINE_MIN_UV" ]; then
+			log "STOP not loading $m: supply ${before}uV already below ${RIG_ONLINE_MIN_UV}uV"
+			break
+		fi
+		modprobe "$m" 2>/dev/null
+		rc=$?
+		sleep "$RIG_RADIO_SETTLE_S"
+		after=$(read_vph)
+		log "radio $m rc=$rc supply ${before}uV -> ${after}uV ($(collapse_count) collapses)"
+	done
+	log "remoteprocs up: $(grep -lc . /sys/class/remoteproc/*/state 2>/dev/null | wc -l) states: $(cat /sys/class/remoteproc/*/state 2>/dev/null | tr '\n' ' ')"
+}
+load_radios
+
+[ -z "$VPH_FILE" ] && exit 0
+
+# Steps below the ceiling, so a sag walks down the ladder we actually have.
+lower_step() {
+	prev=""
+	for f in $FREQS; do
+		[ "$f" -ge "$CEILING" ] && break
+		prev=$f
+	done
+	echo "$prev"
+}
+
+raise_step() {
+	for f in $FREQS; do
+		if [ "$f" -gt "$CEILING" ] && [ "$f" -le "$RIG_MAX_KHZ" ]; then
+			echo "$f"; return
+		fi
+	done
+	echo ""
+}
+
+# Drop one OPP below whatever is running now, and remember it as a hard cap
+# until things have been quiet for a while.
+throttle_down() {
+	next=$(lower_step)
+	if [ -n "$next" ]; then
+		THROTTLE_CAP=$next
+		set_ceiling "$next"
+		return 0
+	fi
+	return 1
+}
+
+last_collapse=$(collapse_count)
+[ -n "$last_collapse" ] && log "input collapses so far: ${last_collapse}"
+
+good=0
+samples=0
+min_seen=$(read_vph)
+while :; do
+	now_collapse=$(collapse_count)
+	if [ -n "$now_collapse" ] && [ -n "$last_collapse" ] && \
+	   [ "$now_collapse" -gt "$last_collapse" ]; then
+		log "INPUT COLLAPSE (${last_collapse} -> ${now_collapse}): shedding load"
+		throttle_down || log "collapse at the lowest OPP; nothing left to shed"
+		last_collapse=$now_collapse
+		good=0
+	fi
+
+	vph=$(read_vph)
+	if [ -n "$vph" ]; then
+		[ "$vph" -lt "$min_seen" ] && min_seen=$vph
+		samples=$((samples + 1))
+		# Periodic headroom report: a run that survives should still say how
+		# close it came to UVLO, otherwise "no reset" tells us nothing about
+		# whether the envelope has margin or got lucky.
+		if [ $((samples % 60)) -eq 0 ]; then
+			log "headroom: vph=${vph}uV min=${min_seen}uV ceiling=${CEILING}kHz"
+			min_seen=$vph
+		fi
+		if [ "$vph" -lt "$RIG_VPH_LOW_UV" ]; then
+			good=0
+			next=$(lower_step)
+			if [ -n "$next" ]; then
+				log "SAG vph=${vph}uV -> ceiling ${CEILING} to ${next} kHz"
+				set_ceiling "$next"
+			elif [ "$RIG_ALLOW_OFFLINE" = 1 ]; then
+				for c in 3 2 1; do
+					n=/sys/devices/system/cpu/cpu$c/online
+					if [ -r "$n" ] && [ "$(cat $n)" = 1 ]; then
+						log "SAG vph=${vph}uV at lowest OPP -> offlining cpu$c"
+						echo 0 > "$n" 2>/dev/null
+						break
+					fi
+				done
+			else
+				log "SAG vph=${vph}uV at lowest OPP; nothing left to shed"
+			fi
+		elif [ "$vph" -gt "$RIG_VPH_OK_UV" ]; then
+			good=$((good + 1))
+			if [ "$good" -ge "$RIG_RECOVER" ]; then
+				THROTTLE_CAP=""
+				next=$(raise_step)
+				if [ -n "$next" ]; then
+					log "RECOVERED vph=${vph}uV -> ceiling ${CEILING} to ${next} kHz"
+					set_ceiling "$next"
+				fi
+				good=0
+			fi
+		else
+			good=0
+		fi
+	fi
+	sleep "$RIG_POLL_S"
+done
