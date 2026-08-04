@@ -22,7 +22,11 @@ case "$1" in
 	[ $? = 0 ] && echo "OK" || echo "FAIL"
 	;;
   restart)
-	"$0" stop
+	# Deliberately not "$0 stop": that writes the clean-shutdown marker,
+	# and a restart is not a shutdown.  A marker written by a restart made
+	# a genuine silent reset look like an orderly reboot in the
+	# 2026-08-04 load-test post-mortem.
+	start-stop-daemon -K -q -p $PIDFILE
 	"$0" start
 	;;
   *)
