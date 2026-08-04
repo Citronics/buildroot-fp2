@@ -23,6 +23,12 @@ LOG="$LOG_DIR/soak-boot-${BOOT_ID:-unknown}.log"
 # Boot registry: exactly one line per boot, appended before anything else.
 # `wc -l BOOTS` = boot count; the PON reason says why the previous boot died
 # (poff=0x0002 + warm_reset=0x0002 = the silent PS_HOLD reset signature).
+# The phase marker lives on the rootfs and therefore SURVIVES a reset.
+# Clear it at boot: otherwise samples on a boot where no experiment is
+# running inherit the previous boot's label, which mislabelled two idle
+# deaths as load deaths in the 2026-08-03 night post-mortem.
+echo "-" > "$LOG_DIR/.phase"
+
 PON=$(dmesg | grep -m1 -oE "pon=0x[0-9a-f]+ warm_reset=0x[0-9a-f]+ poff=0x[0-9a-f]+")
 echo "$(date +%s) boot_id=${BOOT_ID:-unknown} kernel=$(uname -r) ${PON:-pon=unknown}" >> "$LOG_DIR/BOOTS"
 sync "$LOG_DIR/BOOTS" 2>/dev/null || sync
