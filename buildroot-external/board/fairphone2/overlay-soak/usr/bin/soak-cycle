@@ -1,0 +1,61 @@
+#!/bin/sh
+# Unattended soak load, started at boot by S95soak-cycle through exp-run.
+# Repeats: 10 min idle, 5 min of cpu0 flipping between its lowest and highest
+# operating point with three busy cores, 5 min of four-core bursts.
+# Telemetry belongs to soak-logger; this only generates load and names the
+# phase.
+SOAK=/root/soak
+P0=/sys/devices/system/cpu/cpufreq/policy0
+PIDS=
+
+phase() { echo "$1" > $SOAK/.phase; }
+up() { cut -d. -f1 /proc/uptime; }
+
+burn() {
+	PIDS=
+	i=0
+	while [ $i -lt $1 ]; do
+		(while :; do :; done) &
+		PIDS="$PIDS $!"
+		i=$((i + 1))
+	done
+}
+
+unburn() {
+	[ -n "$PIDS" ] && kill $PIDS 2>/dev/null
+	PIDS=
+}
+
+# cpufreq is a module: wait for the policies
+i=0
+while [ ! -e $P0/scaling_governor ] && [ $i -lt 120 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+modprobe cpufreq_userspace 2>/dev/null
+
+while :; do
+	phase idle
+	sleep 600
+
+	phase hammer
+	burn 3
+	echo userspace > $P0/scaling_governor
+	end=$(($(up) + 300))
+	while [ $(up) -lt $end ]; do
+		echo 2265600 > $P0/scaling_setspeed
+		echo 300000 > $P0/scaling_setspeed
+	done
+	echo schedutil > $P0/scaling_governor
+	unburn
+
+	phase burst
+	i=0
+	while [ $i -lt 10 ]; do
+		burn 4
+		sleep 10
+		unburn
+		sleep 20
+		i=$((i + 1))
+	done
+done

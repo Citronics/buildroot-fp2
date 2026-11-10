@@ -1,0 +1,22 @@
+#!/bin/sh
+# Start the soak load at boot. Create /root/soak/stop to keep it off.
+
+case "$1" in
+  start)
+	mkdir -p /root/soak
+	# left by the previous boot: its pid means nothing now
+	rm -f /root/soak/exp.pid
+	if [ -e /root/soak/stop ]; then
+		echo "soak-cycle: disabled by /root/soak/stop"
+		exit 0
+	fi
+	exp-run /usr/bin/soak-cycle
+	;;
+  stop)
+	exp-run stop
+	;;
+  *)
+	echo "Usage: $0 {start|stop}"
+	exit 1
+	;;
+esac

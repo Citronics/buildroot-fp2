@@ -1,0 +1,22 @@
+#!/bin/sh
+# The carrier's Ethernet (USB hub) shows up late: take a DHCP lease when it
+# does, so that the soak can be read over ssh. Never blocks the boot.
+
+case "$1" in
+  start)
+	(
+		i=0
+		while [ ! -e /sys/class/net/eth0 ] && [ $i -lt 90 ]; do
+			sleep 2
+			i=$((i + 1))
+		done
+		[ -e /sys/class/net/eth0 ] || exit 0
+		udhcpc -i eth0 -b -p /var/run/udhcpc.eth0.pid >/dev/null 2>&1
+		sleep 5
+		ip -4 -o addr show eth0 | awk '{print "soak: eth0 " $4}' > /dev/console
+	) &
+	;;
+  stop)
+	[ -f /var/run/udhcpc.eth0.pid ] && kill "$(cat /var/run/udhcpc.eth0.pid)" 2>/dev/null
+	;;
+esac
