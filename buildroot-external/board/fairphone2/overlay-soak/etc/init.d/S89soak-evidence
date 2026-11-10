@@ -1,0 +1,13 @@
+#!/bin/sh
+# Keep what the previous boot left in RAM before the next reset replaces it:
+# its console (pstore), its last power-collapse and transition events, and
+# the PMIC's account of how it ended.
+
+[ "$1" = start ] || exit 0
+
+D=/root/soak/prev-of-$(cat /proc/sys/kernel/random/boot_id)
+mkdir -p "$D"
+cp /sys/fs/pstore/* "$D/" 2>/dev/null
+cat /sys/kernel/debug/f9012000.power-manager/spc_previous > "$D/spc_previous" 2>/dev/null
+dmesg | grep 'pon@800' > "$D/pon"
+sync
