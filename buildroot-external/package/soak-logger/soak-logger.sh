@@ -41,7 +41,7 @@ D=$(vadc_dir)
 
 {
 	echo "# soak-logger start: boot_id=$BOOT_ID kernel=$(uname -r) epoch=$(date +%s)"
-	echo "# fields: epoch uptime_s load1 ph=phase cpufreq_khz(csv|nofreq) trans(csv|-) vbat_uV chg pwrirq=N chgirq=fast/gone/uvalid battirq=pres/tempok batt_mdegC rail=writes/timeouts tsensirq tzone_temps_mC(csv)"
+	echo "# fields: epoch uptime_s load1 ph=phase cpufreq_khz(csv|nofreq) trans(csv|-) vbat_uV chg pwrirq=N chgirq=fast/gone/uvalid battirq=pres/tempok batt_mdegC rail=writes/timeouts/failures/spc_timeouts tsensirq tzone_temps_mC(csv)"
 } >> "$LOG"
 
 while :; do
@@ -79,7 +79,7 @@ while :; do
 	# known to end in a silent reset here, and the counters do not survive
 	# the reset - so they must be in the log, sample by sample.
 	RAIL=/sys/kernel/debug/f9012000.power-manager/rail
-	rail=$(awk '/vdd_writes/{w=$2} /vdd_timeouts/{t=$2} END{print w"/"t}' "$RAIL" 2>/dev/null)
+	rail=$(awk '/vdd_writes/{w=$2} /vdd_timeouts/{t=$2} /vdd_failures/{f=$2} /spc_timeouts/{s=$2} END{print w"/"t"/"f"/"s}' "$RAIL" 2>/dev/null)
 	# TSENS interrupt count: bursts of thousands per second have been seen.
 	tsi=$(awk '/thermal-sensor/{print $2}' /proc/interrupts 2>/dev/null)
 	echo "$(date +%s) $up $load ph=${ph:--} $freqs $trans ${vbat:--} ${chg:--} pwrirq=${pwrirq:-0} chgirq=${chgirq:--} battirq=${battirq:--} ${btemp:--} rail=${rail:--} ${tsi:-0} $temps" >> "$LOG"
