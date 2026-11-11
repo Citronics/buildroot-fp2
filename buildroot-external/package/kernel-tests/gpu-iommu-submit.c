@@ -7,6 +7,12 @@
  * through the MSM8974 GPU SMMU; if translation is wrong the submit faults
  * the context bank and the GPU hangs.
  *
+ * With the argument "fault" the cmdstream instead chains to an indirect
+ * buffer at an address nothing is mapped at (0x70000000): the positive
+ * control. If the GPU really fetches through the SMMU this must raise a
+ * context fault at exactly that address; if it does not, the GPU is not
+ * being translated and a clean run of the normal mode proves nothing.
+ *
  * Exit codes:
  *   0  submit + wait ioctls succeeded
  *   2  no render node (GPU not up)
@@ -70,8 +76,12 @@ static __u64 getparam(int fd, __u32 p)
 	return a.value;
 }
 
-int main(void)
+#define FAULT_IOVA 0x70000000u
+
+int main(int argc, char **argv)
 {
+	int fault = argc > 1 && !strcmp(argv[1], "fault");
+
 	int fd = open("/dev/dri/renderD128", O_RDWR);
 	if (fd < 0) { fprintf(stderr, "open renderD128: %s\n", strerror(errno)); return 2; }
 
@@ -96,13 +106,21 @@ int main(void)
 	if (ioctl(fd, IOCTL_GEM_INFO, &go)) { fprintf(stderr,"GEM_INFO(OFFSET): %s\n",strerror(errno)); return 3; }
 	uint32_t *cs = mmap(0, 4096, PROT_READ|PROT_WRITE, MAP_SHARED, fd, go.value);
 	if (cs == MAP_FAILED) { fprintf(stderr,"mmap: %s\n",strerror(errno)); return 3; }
-	cs[0] = 0xC0000000u | (0u << 16) | (0x10u << 8); /* type-3 CP_NOP, 1 dword */
-	cs[1] = 0x00000000u;
+	if (fault) {
+		/* type-3 CP_INDIRECT_BUFFER_PFD, 2 dwords: address, size */
+		cs[0] = 0xC0000000u | (1u << 16) | (0x37u << 8);
+		cs[1] = FAULT_IOVA;
+		cs[2] = 16;
+		printf("fault mode: indirect buffer at unmapped iova 0x%x\n", FAULT_IOVA);
+	} else {
+		cs[0] = 0xC0000000u | (0u << 16) | (0x10u << 8); /* type-3 CP_NOP, 1 dword */
+		cs[1] = 0x00000000u;
+	}
 
 	struct drm_msm_gem_submit_bo bo; memset(&bo,0,sizeof bo);
 	bo.flags = MSM_SUBMIT_BO_READ; bo.handle = n.handle;
 	struct drm_msm_gem_submit_cmd cmd; memset(&cmd,0,sizeof cmd);
-	cmd.type = MSM_SUBMIT_CMD_BUF; cmd.submit_idx = 0; cmd.submit_offset = 0; cmd.size = 8;
+	cmd.type = MSM_SUBMIT_CMD_BUF; cmd.submit_idx = 0; cmd.submit_offset = 0; cmd.size = fault ? 12 : 8;
 	struct drm_msm_gem_submit s; memset(&s,0,sizeof s);
 	s.flags = MSM_PIPE_3D0; s.nr_bos = 1; s.nr_cmds = 1;
 	s.bos = (uintptr_t)&bo; s.cmds = (uintptr_t)&cmd; s.queueid = q.id;

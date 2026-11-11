@@ -1,0 +1,20 @@
+#!/bin/sh
+# Owns the hardware watchdog and pets it only until a deadline, so a test
+# boot always ends back in the bootloader by itself: when the deadline passes
+# the phone reboots, and if this script or the kernel dies the watchdog bites.
+# The host extends the deadline (uptime, seconds) in /run/deadman-until.
+up() { cut -d. -f1 /proc/uptime; }
+
+exec 3> /dev/watchdog
+deadline=${1:-300}
+while :; do
+	[ -r /run/deadman-until ] && deadline=$(cat /run/deadman-until)
+	if [ "$(up)" -ge "$deadline" ]; then
+		echo "deadman: deadline ${deadline}s reached, rebooting" > /dev/kmsg
+		sync
+		reboot -f
+		sleep 120
+	fi
+	echo . >&3
+	sleep 5
+done

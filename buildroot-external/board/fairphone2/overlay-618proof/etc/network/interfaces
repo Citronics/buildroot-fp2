@@ -1,0 +1,12 @@
+# 6.18 display-observation image (phone, panel + battery).
+#
+# The rig runs Ubuntu on 10.0.42.1 and the host holds 10.0.42.2, so this image
+# must not use that subnet or the two devices collide the moment both are
+# plugged in. Phone = 10.0.43.1, host gets 10.0.43.2 by DHCP.
+auto lo
+iface lo inet loopback
+
+auto usb0
+iface usb0 inet static
+address 10.0.43.1
+netmask 255.255.255.0
