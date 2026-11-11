@@ -1,0 +1,8 @@
+#!/bin/sh
+# With fp2.display=udev on the kernel command line, let udev load the display
+# stack during coldplug, as a system that does not blacklist it would.
+case "$1" in
+start)
+	grep -qw 'fp2.display=udev' /proc/cmdline && rm -f /etc/modprobe.d/display.conf
+	;;
+esac
