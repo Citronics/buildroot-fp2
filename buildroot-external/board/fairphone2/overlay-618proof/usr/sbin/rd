@@ -1,0 +1,7 @@
+#!/bin/sh
+# rd <base> [words]: dump 32-bit registers through /dev/mem.
+a=$(($1)); n=${2:-16}; i=0
+while [ $i -lt $n ]; do
+	printf '%08x: %s\n' $((a + i * 4)) "$(devmem $((a + i * 4)) 32)"
+	i=$((i + 1))
+done

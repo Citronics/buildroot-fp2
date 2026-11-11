@@ -1,0 +1,8 @@
+#!/bin/sh
+# Loads the display stack at boot only when the kernel command line asks for
+# it (fp2.display=auto); otherwise it is left to display-up, run by hand.
+case "$1" in
+start)
+	grep -qw 'fp2.display=auto' /proc/cmdline && display-up
+	;;
+esac
