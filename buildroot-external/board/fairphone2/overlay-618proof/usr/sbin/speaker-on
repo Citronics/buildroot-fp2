@@ -1,0 +1,11 @@
+#!/bin/sh
+# Route playback to the loudspeaker: MultiMedia1 -> SLIMBUS_0_RX -> WCD9320
+# RX7 -> speaker driver, after the "speaker" path of the vendor mixer_paths.xml.
+c=${1:-0}
+m() { amixer -q -c "$c" cset name="$1" "$2" || echo "speaker-on: $1 failed"; }
+m 'SLIMBUS_0_RX Audio Mixer MultiMedia1' 1
+m 'SLIM RX1 MUX' AIF1_PB
+m 'SLIM_0_RX Channels' One
+m 'RX7 MIX1 INP1' RX1
+m 'RX7 Digital Volume' "${2:-70}"
+m 'SPK DRV Volume' 8
