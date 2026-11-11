@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$1" in
+start)	start-stop-daemon -S -b -m -p /run/chg-guard.pid -x /usr/sbin/chg-guard ;;
+stop)	start-stop-daemon -K -p /run/chg-guard.pid ;;
+esac

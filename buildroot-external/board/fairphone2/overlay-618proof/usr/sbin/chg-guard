@@ -1,0 +1,60 @@
+#!/bin/sh
+# Charge guard, independent of the charger driver's own supervision. Reads the
+# battery through the ADC and the charge-enable bit through the PMIC register
+# map; when the battery leaves its bounds while charging is enabled, unbinds
+# the charger driver, whose remove clears the enable bit, and checks the bit.
+DEV='fc4cf000.spmi:pm8941@0:charger@1000'
+DRV=/sys/bus/platform/drivers/qcom-smbb
+REG=/sys/kernel/debug/regmap/0-00/registers
+LOG=/root/chg-guard.log
+VMAX_UV=${VMAX_UV:-4400000}
+TMAX_MC=${TMAX_MC:-50000}
+TMIN_MC=${TMIN_MC:-1000}
+VLOW_UV=${VLOW_UV:-3300000}
+PERIOD=${PERIOD:-5}
+
+adc() {
+	for l in /sys/bus/iio/devices/iio:device*/in_*_label; do
+		[ "$(cat "$l" 2>/dev/null)" = "$1" ] && { cat "${l%_label}_input" 2>/dev/null; return; }
+	done
+}
+reg() { dd if=$REG bs=9 skip=$(($1)) count=1 2>/dev/null | cut -d' ' -f2; }
+enabled() { case "$(reg 0x1049)" in [89a-f]?) return 0;; esac; return 1; }
+say() { echo "$(date +%T) up=$(cut -d. -f1 /proc/uptime) $*" >> $LOG; }
+
+trip() {
+	say "TRIP: $*"
+	[ -e "$DRV/$DEV" ] && echo "$DEV" > $DRV/unbind
+	if enabled; then
+		say "KILL FAILED: charge enable still set (chg_ctrl=0x$(reg 0x1049))"
+	else
+		say "charging stopped (chg_ctrl=0x$(reg 0x1049))"
+	fi
+	tripped=1
+}
+
+mount -t debugfs none /sys/kernel/debug 2>/dev/null
+[ "$1" = trip ] && { tripped=0; trip "requested by hand"; exit 0; }
+
+tripped=0; unread=0; over=0; hot=0; low=0; n=0
+say "guard started: vmax=$VMAX_UV tmin=$TMIN_MC tmax=$TMAX_MC"
+while :; do
+	cut -d. -f1 /proc/uptime > /run/chg-guard.beat
+	v=$(adc VBAT_SNS); t=$(adc LR_MUX1_BAT_THERM)
+	if [ -z "$v" ] || [ -z "$t" ]; then unread=$((unread + 1)); else unread=0; fi
+	if [ -n "$v" ] && [ "$v" -gt "$VMAX_UV" ]; then over=$((over + 1)); else over=0; fi
+	if [ -n "$t" ] && { [ "$t" -ge "$TMAX_MC" ] || [ "$t" -le "$TMIN_MC" ]; }; then hot=$((hot + 1)); else hot=0; fi
+	if [ $tripped = 0 ] && enabled; then
+		if [ $unread -ge 3 ]; then trip "battery unreadable (v='$v' t='$t')"
+		elif [ $over -ge 2 ]; then trip "battery voltage $v uV"
+		elif [ $hot -ge 2 ]; then trip "battery temperature $t mC"
+		fi
+	fi
+	if [ $tripped = 1 ]; then
+		if [ -n "$v" ] && [ "$v" -lt "$VLOW_UV" ]; then low=$((low + 1)); else low=0; fi
+		[ $low -ge 3 ] && { say "battery at $v uV with charging stopped: powering off"; sync; poweroff; }
+	fi
+	n=$((n + 1))
+	[ $((n % 12)) = 1 ] && say "v=$v t=$t chg_ctrl=0x$(reg 0x1049) chg_rt=0x$(reg 0x1010) tripped=$tripped"
+	sleep $PERIOD
+done

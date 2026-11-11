@@ -8,6 +8,10 @@ rm -f "${TARGET_DIR}/lib/firmware/wcnss.mdt" "${TARGET_DIR}"/lib/firmware/wcnss.
 # Not wanted on a test image: it holds the first boot for half a minute.
 rm -f "${TARGET_DIR}/etc/init.d/S15first-boot-resize"
 
+# A login prompt on the panel, under the kernel console.
+grep -q '^tty1::' "${TARGET_DIR}/etc/inittab" || \
+	sed -i '/GENERIC_SERIAL/a tty1::respawn:/sbin/getty -L tty1 0 linux' "${TARGET_DIR}/etc/inittab"
+
 # Optional second kernel, for an A/B on the same system: FP2_KERNEL_B is a
 # kernel build directory, FP2_KERNEL_B_SRC its source tree. The kernel lands in
 # /boot as zImage-b and fp2-b.dtb, its modules next to the main kernel's.

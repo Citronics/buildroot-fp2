@@ -1,6 +1,6 @@
 #!/bin/sh
-# Loads the display stack at boot only when the kernel command line asks for
-# it (fp2.display=auto); otherwise it is left to display-up, run by hand.
+# Loads the display stack late in boot when the kernel command line asks for
+# it (fp2.display=auto); see S02display-udev for the default.
 case "$1" in
 start)
 	grep -qw 'fp2.display=auto' /proc/cmdline && display-up

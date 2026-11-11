@@ -1,8 +1,15 @@
 #!/bin/sh
-# With fp2.display=udev on the kernel command line, let udev load the display
-# stack during coldplug, as a system that does not blacklist it would.
+# The display stack is loaded by udev during coldplug, so the kernel console
+# reaches the panel a few seconds into boot. fp2.display=off (load by hand
+# with display-up) or fp2.display=auto (load late, from S45display) on the
+# kernel command line keep it out of coldplug for bring-up tests.
+B=/etc/modprobe.d/display.conf
 case "$1" in
 start)
-	grep -qw 'fp2.display=udev' /proc/cmdline && rm -f /etc/modprobe.d/display.conf
+	if grep -qw 'fp2.display=\(off\|auto\)' /proc/cmdline; then
+		printf 'blacklist %s\n' msm panel-fairphone-fp2-otm1902b panel-fairphone-fp2-s6d6fa1 > $B
+	else
+		rm -f $B
+	fi
 	;;
 esac

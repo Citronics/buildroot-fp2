@@ -1,5 +1,6 @@
 #!/bin/sh
-# Loads the display stack, which this image keeps out of the boot sequence.
+# Loads the display stack by hand, on a boot that kept it out of coldplug
+# (fp2.display=off).
 for m in panel-fairphone-fp2-otm1902b panel-fairphone-fp2-s6d6fa1 msm; do
 	modprobe "$m" || echo "display-up: $m failed"
 done
