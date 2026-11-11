@@ -1,11 +1,13 @@
 #!/bin/sh
 # Charge guard, independent of the charger driver's own supervision. Reads the
 # battery through the ADC and the charge-enable bit through the PMIC register
-# map; when the battery leaves its bounds while charging is enabled, unbinds
-# the charger driver, whose remove clears the enable bit, and checks the bit.
+# map; when the battery leaves its bounds while charging is enabled, inhibits
+# charging through the driver, checks the enable bit, and unbinds the driver
+# (its remove clears the bit, and takes the USB link with it) if it is still set.
 DEV='fc4cf000.spmi:pm8941@0:charger@1000'
 DRV=/sys/bus/platform/drivers/qcom-smbb
 REG=/sys/kernel/debug/regmap/0-00/registers
+INH=/sys/class/power_supply/smbb-bif/charge_behaviour
 LOG=/root/chg-guard.log
 VMAX_UV=${VMAX_UV:-4400000}
 TMAX_MC=${TMAX_MC:-50000}
@@ -24,7 +26,12 @@ say() { echo "$(date +%T) up=$(cut -d. -f1 /proc/uptime) $*" >> $LOG; }
 
 trip() {
 	say "TRIP: $*"
-	[ -e "$DRV/$DEV" ] && echo "$DEV" > $DRV/unbind
+	[ -w $INH ] && echo inhibit-charge > $INH 2>/dev/null
+	sleep 1
+	if enabled; then
+		say "inhibit did not stop charging: unbinding the driver"
+		[ -e "$DRV/$DEV" ] && echo "$DEV" > $DRV/unbind
+	fi
 	if enabled; then
 		say "KILL FAILED: charge enable still set (chg_ctrl=0x$(reg 0x1049))"
 	else
