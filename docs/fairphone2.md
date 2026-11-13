@@ -57,7 +57,7 @@ The Limeboard's STM32F401 runs CircuitPython. It drives the RGB LED, reads the u
 
 ## Home Assistant
 
-`limeboard-ha` makes the board a Home Assistant device through MQTT discovery. It covers the phone's temperature, CPU frequency, load, memory, supply voltage, uptime and address, its accelerometer (with a tilt angle), gyroscope and magnetometer, and its light and proximity sensors when present, all sampled once per interval, plus a reboot button. Once the bridge is deployed, it adds the STM32's temperature, button, RGB LED (a light with 8 colours: only blue has PWM), key presses and the header pins listed in the configuration.
+`limeboard-ha` makes the board a Home Assistant device through MQTT discovery. It covers the phone's temperature, CPU frequency, load, memory, supply voltage, uptime and address, its accelerometer (with a tilt angle), gyroscope and magnetometer, and its light and proximity sensors when present, streamed every `SENSOR_INTERVAL` (1 s by default), plus a reboot button. Once the bridge is deployed, it adds the STM32's temperature, button, RGB LED (a light with 8 colours: only blue has PWM), key presses and the header pins listed in the configuration.
 
 1. Set `MQTT_HOST` (and `MQTT_USER`/`MQTT_PASSWORD` if your broker needs them) in `/etc/limeboard-ha.conf`.
 2. Run `/etc/init.d/S95limeboard-ha restart`.
