@@ -1,0 +1,10 @@
+config BR2_PACKAGE_LIMEBOARD_HA
+	bool "limeboard-ha"
+	select BR2_PACKAGE_MOSQUITTO
+	select BR2_PACKAGE_LIMEBOARD_MCU
+	help
+	  Makes the Limeboard a Home Assistant device: publishes MQTT
+	  discovery for the phone's sensors and, through the STM32
+	  bridge, for the STM32's button, LED, header pins and the
+	  phone's keys. Configured in /etc/limeboard-ha.conf; idle
+	  until a broker is set there.

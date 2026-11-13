@@ -1,0 +1,304 @@
+#!/bin/sh
+#
+# limeboard-ha - make the Limeboard a Home Assistant device over MQTT
+#
+# Publishes MQTT discovery for the phone (temperature, CPU frequency, load,
+# memory, supply voltage, uptime, IP address, reboot) and, when the STM32
+# bridge runs (limeboard-mcu deploy), for the STM32: its temperature, user
+# button, RGB LED, the phone's keys and the configured header pins.
+#
+# Topics: <base>/status (online/offline, last will), <base>/state and
+# <base>/mcu (JSON states), <base>/cmd/<name> (commands), with
+# <base> = limeboard/<node id>.
+
+CONF=${LIMEBOARD_HA_CONF:-/etc/limeboard-ha.conf}
+RUN=/run/limeboard-ha
+
+MQTT_HOST=""
+MQTT_PORT=1883
+MQTT_USER=""
+MQTT_PASSWORD=""
+DISCOVERY_PREFIX=homeassistant
+INTERVAL=30
+MCU_OUTPUTS=""
+MCU_INPUTS=""
+MCU_INPUT_MODE=in
+MCU_POWER_KEY=no
+[ -f "$CONF" ] && . "$CONF"
+
+log() { echo "limeboard-ha: $*"; }
+
+serial=$(cat /sys/block/mmcblk0/device/serial 2>/dev/null | sed 's/^0x//')
+[ -n "$serial" ] || serial=$(cat /etc/machine-id 2>/dev/null | cut -c1-8)
+NODE_ID=${NODE_ID:-limeboard_$serial}
+DEVICE_NAME=${DEVICE_NAME:-Limeboard $serial}
+BASE=limeboard/$NODE_ID
+MCU_PORT=""
+
+# mqtt <mosquitto_pub|mosquitto_sub> [args]
+mqtt() {
+	tool=$1; shift
+	if [ -n "$MQTT_USER" ]; then
+		"$tool" -h "$MQTT_HOST" -p "$MQTT_PORT" -u "$MQTT_USER" -P "$MQTT_PASSWORD" "$@"
+	else
+		"$tool" -h "$MQTT_HOST" -p "$MQTT_PORT" "$@"
+	fi
+}
+
+pub() { mqtt mosquitto_pub -q 1 "$@"; }
+
+# Run in the background, the subscriber replaces the subshell, so that $!
+# is mosquitto_sub itself
+sub_exec() {
+	if [ -n "$MQTT_USER" ]; then
+		exec mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" -u "$MQTT_USER" -P "$MQTT_PASSWORD" "$@"
+	fi
+	exec mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" "$@"
+}
+
+json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# discovery <component> <object> <name> <extra JSON members>
+discovery() {
+	pub -r -t "$DISCOVERY_PREFIX/$1/$NODE_ID/$2/config" -m "{\"name\":\"$3\",\"unique_id\":\"${NODE_ID}_$2\",\"availability_mode\":\"all\",\"availability\":[{\"topic\":\"$BASE/status\"}$AVAIL_EXTRA],\"device\":$DEVICE,$4}"
+}
+
+publish_discovery() {
+	kver=$(uname -r)
+	DEVICE="{\"identifiers\":[\"$NODE_ID\"],\"name\":\"$(json_str "$DEVICE_NAME")\",\"manufacturer\":\"Citronics\",\"model\":\"Limeboard (Fairphone 2)\",\"sw_version\":\"$kver\"}"
+	S="\"state_topic\":\"$BASE/state\""
+	AVAIL_EXTRA=""
+	discovery sensor cpu_temp "CPU temperature" "$S,\"value_template\":\"{{ value_json.cpu_temp }}\",\"device_class\":\"temperature\",\"unit_of_measurement\":\"°C\",\"state_class\":\"measurement\""
+	discovery sensor cpu_freq "CPU frequency" "$S,\"value_template\":\"{{ value_json.cpu_freq }}\",\"device_class\":\"frequency\",\"unit_of_measurement\":\"MHz\",\"state_class\":\"measurement\""
+	discovery sensor load "Load" "$S,\"value_template\":\"{{ value_json.load }}\",\"state_class\":\"measurement\",\"icon\":\"mdi:chip\""
+	discovery sensor mem_used "Memory used" "$S,\"value_template\":\"{{ value_json.mem_used }}\",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\",\"icon\":\"mdi:memory\""
+	discovery sensor supply_voltage "Supply voltage" "$S,\"value_template\":\"{{ value_json.supply_voltage }}\",\"device_class\":\"voltage\",\"unit_of_measurement\":\"V\",\"state_class\":\"measurement\""
+	discovery sensor uptime "Uptime" "$S,\"value_template\":\"{{ value_json.uptime }}\",\"device_class\":\"duration\",\"unit_of_measurement\":\"s\",\"entity_category\":\"diagnostic\""
+	discovery sensor ip "IP address" "$S,\"value_template\":\"{{ value_json.ip }}\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:ip-network\""
+	discovery button reboot "Reboot" "\"command_topic\":\"$BASE/cmd/reboot\",\"device_class\":\"restart\",\"entity_category\":\"config\""
+
+	# STM32 entities: unavailable while the bridge does not answer
+	M="\"state_topic\":\"$BASE/mcu\""
+	AVAIL_EXTRA=",{\"topic\":\"$BASE/mcu/status\"}"
+	discovery sensor mcu_temp "MCU temperature" "$M,\"value_template\":\"{{ value_json.temp }}\",\"device_class\":\"temperature\",\"unit_of_measurement\":\"°C\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\""
+	discovery binary_sensor button "Button" "$M,\"value_template\":\"{{ 'ON' if value_json.btn else 'OFF' }}\",\"icon\":\"mdi:gesture-tap-button\""
+	for c in r:red g:green b:blue; do
+		discovery switch "led_${c%%:*}" "LED ${c#*:}" "$M,\"value_template\":\"{{ 'ON' if value_json.led_${c%%:*} else 'OFF' }}\",\"command_topic\":\"$BASE/cmd/led_${c%%:*}\",\"icon\":\"mdi:led-on\""
+	done
+	discovery button press_vol_up "Press volume up" "\"command_topic\":\"$BASE/cmd/press_vol_up\",\"icon\":\"mdi:volume-plus\""
+	discovery button press_vol_down "Press volume down" "\"command_topic\":\"$BASE/cmd/press_vol_down\",\"icon\":\"mdi:volume-minus\""
+	discovery button press_camera "Press camera key" "\"command_topic\":\"$BASE/cmd/press_camera\",\"icon\":\"mdi:camera\""
+	if [ "$MCU_POWER_KEY" = yes ]; then
+		discovery button press_power "Press power key" "\"command_topic\":\"$BASE/cmd/press_power\",\"icon\":\"mdi:power\""
+	else
+		pub -r -t "$DISCOVERY_PREFIX/button/$NODE_ID/press_power/config" -n
+	fi
+	for p in $MCU_OUTPUTS; do
+		discovery switch "$(echo "$p" | tr "[:upper:]" "[:lower:]")" "$p" "$M,\"value_template\":\"{{ 'ON' if value_json.$p else 'OFF' }}\",\"command_topic\":\"$BASE/cmd/$p\""
+	done
+	for p in $MCU_INPUTS; do
+		discovery binary_sensor "$(echo "$p" | tr "[:upper:]" "[:lower:]")" "$p" "$M,\"value_template\":\"{{ 'ON' if value_json.$p else 'OFF' }}\""
+	done
+}
+
+num_or_null() { [ -n "$1" ] && echo "$1" || echo null; }
+
+linux_state() {
+	t=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1)
+	[ -n "$t" ] && t=$(awk -v t="$t" 'BEGIN { printf "%.1f", t / 1000 }')
+	f=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)
+	[ -n "$f" ] && f=$((f / 1000))
+	read -r l1 _ < /proc/loadavg
+	up=$(cut -d. -f1 /proc/uptime)
+	mem=$(awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } END { if (t) printf "%.1f", (t - a) * 100 / t }' /proc/meminfo)
+	v=""
+	for ps in /sys/class/power_supply/*; do
+		[ "$(cat "$ps/type" 2>/dev/null)" = Battery ] || continue
+		v=$(cat "$ps/voltage_now" 2>/dev/null) && break
+	done
+	# Without a battery driver reading, VBAT from the PM8941 VADC (µV)
+	if [ -z "$v" ]; then
+		vadc=$(grep -l 'adc@3100' /sys/bus/iio/devices/iio:device*/name 2>/dev/null | head -1)
+		[ -n "$vadc" ] && v=$(cat "${vadc%/name}/in_voltage6_input" 2>/dev/null)
+	fi
+	[ -n "$v" ] && v=$(awk -v v="$v" 'BEGIN { printf "%.3f", v / 1000000 }')
+	# Address of the interface with the default route (not the USB gadget's)
+	ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
+	[ -n "$ip" ] || ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{ sub("/.*", "", $4); print $4; exit }')
+	printf '{"cpu_temp":%s,"cpu_freq":%s,"load":%s,"mem_used":%s,"supply_voltage":%s,"uptime":%s,"ip":"%s"}' \
+		"$(num_or_null "$t")" "$(num_or_null "$f")" "$(num_or_null "$l1")" "$(num_or_null "$mem")" \
+		"$(num_or_null "$v")" "$(num_or_null "$up")" "$ip"
+}
+
+find_mcu_port() {
+	MCU_PORT=""
+	for p in /dev/serial/by-id/*Limeboard*STM32*; do
+		[ -e "$p" ] || continue
+		case "$p" in *-if00) MCU_PORT=$(readlink -f "$p") ;; esac
+	done
+	[ -n "$MCU_PORT" ]
+}
+
+# Stopped by limeboard-mcu, which is using the console?
+mcu_paused() {
+	[ -f "$RUN/mcu-reader.pid" ] || return 1
+	[ "$(cut -d' ' -f3 "/proc/$(cat "$RUN/mcu-reader.pid")/stat" 2>/dev/null)" = T ]
+}
+
+# The reader and the command handler are processes of their own: they
+# find the port themselves
+mcu_send() {
+	mcu_paused && return 1
+	[ -e "$MCU_PORT" ] || find_mcu_port || return 1
+	printf '%s\n' "$1" > "$MCU_PORT" 2>/dev/null
+}
+
+mcu_setup() {
+	for p in $MCU_OUTPUTS; do mcu_send "mode $p out"; done
+	for p in $MCU_INPUTS; do mcu_send "mode $p $MCU_INPUT_MODE"; done
+	mcu_send get
+}
+
+# limeboard-ha --mcu-reader <port>: forward the bridge's JSON lines to MQTT
+# until the port goes away. The console also carries CircuitPython's own
+# messages, which are skipped. limeboard-mcu stops this process (pid file)
+# while it uses the console.
+mcu_reader() {
+	echo $$ > "$RUN/mcu-reader.pid"
+	stty -F "$MCU_PORT" raw -echo 2>/dev/null
+	cr=$(printf '\r')
+	online=""
+	while IFS= read -r line; do
+		line=${line%"$cr"}
+		case "$line" in
+			'{'*'"t": "state"'*|'{'*'"t":"state"'*)
+				pub -r -t "$BASE/mcu" -m "$line"
+				if [ -z "$online" ]; then
+					pub -r -t "$BASE/mcu/status" -m online
+					touch "$RUN/mcu-online"
+					online=1
+				fi
+				;;
+			'{'*'"t": "hello"'*|'{'*'"t":"hello"'*)
+				# The bridge (re)started: pin modes are back to defaults
+				mcu_setup
+				;;
+			'{'*'"t": "error"'*|'{'*'"t":"error"'*)
+				log "MCU: $line"
+				;;
+		esac
+	done < "$MCU_PORT"
+	rm -f "$RUN/mcu-online" "$RUN/mcu-reader.pid"
+	pub -r -t "$BASE/mcu/status" -m offline
+}
+
+# The STM32 entities become available with the bridge's first state
+mcu_start() {
+	find_mcu_port || return 1
+	"$0" --mcu-reader "$MCU_PORT" &
+	MCU_READER=$!
+	# CircuitPython drops output until it has seen the port opened
+	nap 1.5
+	mcu_setup
+	log "STM32 console on $MCU_PORT"
+}
+
+handle_commands() {
+	while read -r topic payload; do
+		name=${topic##*/}
+		case "$name" in
+			reboot)
+				pub -r -t "$BASE/status" -m offline
+				reboot
+				;;
+			led_r|led_g|led_b|GPIO*)
+				[ "$payload" = ON ] && v=1 || v=0
+				mcu_send "set $name $v"
+				;;
+			press_power)
+				[ "$MCU_POWER_KEY" = yes ] && mcu_send "press power 300"
+				;;
+			press_*)
+				mcu_send "press ${name#press_} 300"
+				;;
+		esac
+	done
+}
+
+# Sleep in the background so that a stop signal is handled at once
+nap() {
+	sleep "$1" &
+	wait $!
+}
+
+cleanup() {
+	[ -n "$MCU_READER" ] && kill "$MCU_READER" 2>/dev/null
+	[ -n "$HANDLER" ] && kill "$HANDLER" 2>/dev/null
+	if [ -n "$SUB" ] && kill "$SUB" 2>/dev/null; then
+		i=0
+		while kill -0 "$SUB" 2>/dev/null && [ $i -lt 10 ]; do sleep 0.2; i=$((i + 1)); done
+		kill -9 "$SUB" 2>/dev/null
+	fi
+	MCU_READER=""; HANDLER=""; SUB=""
+	rm -f "$RUN/mcu-reader.pid" "$RUN/mcu-online"
+}
+
+session() {
+	mkdir -p "$RUN"
+	rm -f "$RUN/cmd"
+	mkfifo "$RUN/cmd"
+	# The subscriber holds the connection that carries the last will. Its
+	# client id is per process: a second connection with the same id would
+	# take the session over and fire the will.
+	sub_exec -q 1 -k 30 -i "${NODE_ID}-$$" -v \
+		--will-topic "$BASE/status" --will-payload offline --will-retain --will-qos 1 \
+		-t "$BASE/cmd/#" > "$RUN/cmd" &
+	SUB=$!
+	"$0" --handler < "$RUN/cmd" &
+	HANDLER=$!
+	nap 2
+	kill -0 "$SUB" 2>/dev/null || return 1
+	publish_discovery || return 1
+	pub -r -t "$BASE/status" -m online
+	pub -r -t "$BASE/mcu/status" -m offline
+	log "connected to $MQTT_HOST:$MQTT_PORT as $NODE_ID"
+	while kill -0 "$SUB" 2>/dev/null; do
+		pub -r -t "$BASE/state" -m "$(linux_state)" || break
+		if [ -n "$MCU_READER" ] && kill -0 "$MCU_READER" 2>/dev/null && [ -e "$MCU_PORT" ]; then
+			# Without a bridge, commands would land in a bare REPL
+			[ -e "$RUN/mcu-online" ] && mcu_send get
+		else
+			[ -n "$MCU_READER" ] && kill "$MCU_READER" 2>/dev/null
+			MCU_READER=""
+			mcu_start
+		fi
+		nap "$INTERVAL"
+	done
+	return 1
+}
+
+case "$1" in
+	--mcu-reader)
+		MCU_PORT=$2
+		mcu_reader
+		exit 0
+		;;
+	--handler)
+		handle_commands
+		exit 0
+		;;
+esac
+
+trap 'cleanup; [ -n "$MQTT_HOST" ] && pub -r -t "$BASE/status" -m offline; exit 0' INT TERM
+
+if [ -z "$MQTT_HOST" ]; then
+	log "MQTT_HOST is not set in $CONF, idle"
+	while :; do nap 3600; done
+fi
+
+while :; do
+	session
+	cleanup
+	log "connection to $MQTT_HOST:$MQTT_PORT lost, retrying in 10 s"
+	nap 10
+done

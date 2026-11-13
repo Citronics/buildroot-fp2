@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# S95limeboard-ha - Home Assistant MQTT discovery agent
+#
+
+DAEMON="limeboard-ha"
+PIDFILE="/var/run/${DAEMON}.pid"
+LOGFILE="/var/log/${DAEMON}.log"
+
+start() {
+	printf 'Starting %s: ' "$DAEMON"
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" \
+		--startas /bin/sh -- -c "exec /usr/bin/limeboard-ha >> $LOGFILE 2>&1"
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	return "$status"
+}
+
+stop() {
+	printf 'Stopping %s: ' "$DAEMON"
+	pid=$(cat "$PIDFILE" 2>/dev/null)
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	status=$?
+	# Wait for it to exit: it publishes "offline" on the way out
+	i=0
+	while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do
+		sleep 0.2
+		i=$((i + 1))
+	done
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	rm -f "$PIDFILE"
+	return "$status"
+}
+
+case "$1" in
+	start|stop)
+		"$1"
+		;;
+	restart|reload)
+		stop
+		sleep 1
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+		;;
+esac
