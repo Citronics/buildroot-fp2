@@ -1,0 +1,287 @@
+#!/bin/sh
+#
+# limeboard-mcu - talk to and reflash the Limeboard's STM32F401
+#
+# The STM32 runs CircuitPython and shows up on USB as a serial console
+# (REPL) and its CIRCUITPY drive. The bridge (code.py, installed by
+# 'deploy') answers commands on the same console; Ctrl-C there gives the
+# REPL. Reflashing goes through the STM32's ROM bootloader (USB DFU,
+# 0483:df11), entered from CircuitPython, so no jumper is needed.
+#
+# Usage: limeboard-mcu <command> [args]
+#   port                  print the console serial port
+#   info                  firmware version, unique id, temperature
+#   exec <code|->         run Python on the MCU (raw REPL), print the output
+#   repl                  interactive REPL (picocom, else busybox microcom)
+#   send <command>        send one bridge command, print the JSON reply
+#   deploy [dir]          install the bridge (boot.py, code.py) and reset
+#   reset                 hard reset (restarts boot.py and code.py)
+#   bootloader            reboot into the ROM bootloader (USB DFU)
+#   backup <file.bin>     read the whole flash (firmware and CIRCUITPY)
+#   flash <file.bin>      write a full flash image, then start it
+#
+# While a command uses the console, limeboard-ha's reader is paused. exec,
+# info, reset and deploy stop the bridge; it starts again afterwards.
+
+SHARE=/usr/share/limeboard-mcu
+DFU_ID=0483:df11
+EOT=$(printf '\004')
+FLASH_BASE=0x08000000
+FLASH_SIZE=${LIMEBOARD_MCU_FLASH_SIZE:-524288}	# STM32F401xE: 512 KiB
+READER_PID=/run/limeboard-ha/mcu-reader.pid
+
+die() {
+	echo "limeboard-mcu: $*" >&2
+	exit 1
+}
+
+find_console() {
+	CONSOLE=""
+	for p in /dev/serial/by-id/*Limeboard*STM32*-if00; do
+		[ -e "$p" ] && CONSOLE=$(readlink -f "$p")
+	done
+	[ -n "$CONSOLE" ]
+}
+
+need_console() {
+	find_console || die "STM32 not found on USB (in DFU mode? see 'dfu-util -l')"
+}
+
+in_dfu() {
+	dfu-util -l 2>/dev/null | grep -q "\[$DFU_ID\]"
+}
+
+# Only one process may read the console: stop limeboard-ha's reader while
+# this command runs.
+PAUSED=""
+pause_agent() {
+	[ -f "$READER_PID" ] || return 0
+	pid=$(cat "$READER_PID")
+	kill -STOP "$pid" 2>/dev/null && PAUSED=$pid
+	trap 'resume_agent' EXIT
+	trap 'exit 1' INT TERM
+}
+resume_agent() {
+	[ -n "$PAUSED" ] && kill -CONT "$PAUSED" 2>/dev/null
+	PAUSED=""
+}
+
+# Get from "running the bridge" (or "press any key") to the raw REPL
+enter_raw_repl() {
+	stty -F "$CONSOLE" raw -echo 2>/dev/null
+	printf '\003' > "$CONSOLE"; sleep 0.3
+	printf '\r' > "$CONSOLE"; sleep 0.3
+	printf '\003\003' > "$CONSOLE"; sleep 0.3
+	printf '\001' > "$CONSOLE"
+}
+
+# exec_code <code>: run code through the raw REPL. Prints the program's
+# output, returns 1 if it raised.
+exec_code() {
+	need_console
+	pause_agent
+	tmp=$(mktemp)
+	stty -F "$CONSOLE" raw -echo 2>/dev/null
+	cat "$CONSOLE" > "$tmp" &
+	reader=$!
+	enter_raw_repl
+	i=0
+	until grep -q 'raw REPL; CTRL-B to exit' "$tmp" 2>/dev/null; do
+		i=$((i + 1))
+		[ $i -gt 30 ] && { kill $reader; rm -f "$tmp"; die "no raw REPL"; }
+		sleep 0.1
+	done
+	start=$(wc -c < "$tmp")
+	# Feed the code in small pieces: the REPL has a small input buffer
+	printf '%s' "$1" | while :; do
+		chunk=$(dd bs=128 count=1 2>/dev/null; echo x)
+		chunk=${chunk%x}
+		[ -z "$chunk" ] && break
+		printf '%s' "$chunk" > "$CONSOLE"
+		sleep 0.02
+	done
+	printf '\004' > "$CONSOLE"
+	# Reply: OK <stdout> \004 <stderr> \004 >
+	i=0
+	while [ "$(tail -c +$((start + 1)) "$tmp" | tr -cd '\004' | wc -c)" -lt 2 ]; do
+		i=$((i + 1))
+		[ $i -gt "${EXEC_TIMEOUT:-300}" ] && break
+		sleep 0.1
+	done
+	# Back to the normal REPL, and soft reboot to start code.py again
+	printf '\002' > "$CONSOLE"; sleep 0.1
+	printf '\004' > "$CONSOLE"; sleep 0.5
+	kill $reader 2>/dev/null
+	out=$(tail -c +$((start + 1)) "$tmp" | sed '1s/^OK//')
+	rm -f "$tmp"
+	resume_agent
+	stdout=${out%%"$EOT"*}
+	rest=${out#*"$EOT"}
+	stderr=${rest%%"$EOT"*}
+	[ -n "$stdout" ] && printf '%s' "$stdout" | tr -d '\r'
+	if [ -n "$stderr" ]; then
+		printf '%s' "$stderr" | tr -d '\r' >&2
+		return 1
+	fi
+	return 0
+}
+
+# USB device number of the MCU: it changes whenever the MCU re-enumerates
+mcu_devnum() {
+	find_console && cat "/sys/class/tty/${CONSOLE##*/}/device/../devnum" 2>/dev/null
+}
+
+# exec_reset <code>: run code that resets the MCU, which drops off USB
+# without answering. Succeeds once the MCU has left USB or re-enumerated.
+exec_reset() {
+	need_console
+	pause_agent
+	old=$(mcu_devnum)
+	for _ in 1 2; do
+		enter_raw_repl
+		sleep 0.3
+		printf '%s\004' "$1" > "$CONSOLE" 2>/dev/null
+		i=0
+		while [ $i -lt 10 ]; do
+			sleep 0.5
+			[ "$(mcu_devnum)" != "$old" ] && { resume_agent; return 0; }
+			i=$((i + 1))
+		done
+	done
+	die "the MCU did not reset"
+}
+
+wait_for() {
+	# wait_for <seconds> <command...>
+	t=$1; shift
+	i=0
+	while ! "$@"; do
+		i=$((i + 1))
+		[ $i -gt $((t * 2)) ] && return 1
+		sleep 0.5
+	done
+}
+
+cmd_bootloader() {
+	in_dfu && return 0
+	exec_reset "import microcontroller
+microcontroller.on_next_reset(microcontroller.RunMode.BOOTLOADER)
+microcontroller.reset()"
+	wait_for 15 in_dfu || die "the ROM bootloader did not appear"
+	echo "in DFU mode ($DFU_ID)"
+}
+
+cmd_backup() {
+	[ -n "$1" ] || die "usage: limeboard-mcu backup <file.bin>"
+	[ -e "$1" ] && die "$1 exists"
+	cmd_bootloader
+	# Read only, then leave DFU and start the firmware again
+	dfu-util -d "$DFU_ID" -a 0 -s "$FLASH_BASE:$FLASH_SIZE:leave" -U "$1" || die "read failed"
+	[ "$(wc -c < "$1")" -eq "$FLASH_SIZE" ] || die "short read: $(wc -c < "$1") bytes"
+	echo "saved $FLASH_SIZE bytes to $1"
+	wait_for 20 find_console || die "CircuitPython did not come back on USB"
+}
+
+cmd_flash() {
+	[ -f "$1" ] || die "usage: limeboard-mcu flash <file.bin>"
+	cmd_bootloader
+	dfu-util -d "$DFU_ID" -a 0 -s "$FLASH_BASE:leave" -D "$1" || die "flashing failed: the MCU stays in DFU mode, retry"
+	wait_for 20 find_console || die "flashed, but CircuitPython did not come back on USB"
+	echo "flashed $1"
+}
+
+cmd_deploy() {
+	src=${1:-$SHARE}
+	if [ ! -f "$src/code.py" ] || [ ! -f "$src/boot.py" ]; then die "no code.py/boot.py in $src"; fi
+	dev=$(readlink -f /dev/disk/by-label/CIRCUITPY 2>/dev/null)
+	[ -b "$dev" ] || die "CIRCUITPY drive not found"
+	mnt=$(mktemp -d)
+	mount -t vfat "$dev" "$mnt" || { rmdir "$mnt"; die "cannot mount $dev"; }
+	cp "$src/boot.py" "$src/code.py" "$mnt/" && sync
+	umount "$mnt"; rmdir "$mnt"
+	# Let CircuitPython's auto-reload after the write pass first. boot.py
+	# only runs after a hard reset.
+	sleep 3
+	exec_reset "import microcontroller
+microcontroller.reset()"
+	wait_for 20 find_console || die "the MCU did not come back"
+	sleep 2
+	echo "deployed on $CONSOLE"
+}
+
+# cmd_send <command>: print the bridge's first JSON line in reply
+cmd_send() {
+	need_console
+	pause_agent
+	stty -F "$CONSOLE" raw -echo 2>/dev/null
+	tmp=$(mktemp)
+	cat "$CONSOLE" > "$tmp" &
+	reader=$!
+	# CircuitPython drops output until it has seen the port opened
+	sleep 1
+	printf '%s\n' "$*" > "$CONSOLE"
+	i=0
+	until grep -q '^{' "$tmp" 2>/dev/null || [ $i -gt 50 ]; do i=$((i + 1)); sleep 0.1; done
+	kill $reader 2>/dev/null
+	reply=$(tr -d '\r' < "$tmp" | grep -m1 '^{')
+	rm -f "$tmp"
+	resume_agent
+	[ -n "$reply" ] || die "no reply (is the bridge deployed and running?)"
+	echo "$reply"
+}
+
+case "$1" in
+	port|ports)
+		find_console && echo "$CONSOLE"
+		if in_dfu; then echo "DFU: $DFU_ID"; fi
+		;;
+	info)
+		exec_code "import microcontroller, os
+u = os.uname()
+print('firmware:', u.version)
+print('board:   ', u.machine)
+print('uid:     ', microcontroller.cpu.uid.hex())
+print('temp:    ', microcontroller.cpu.temperature)"
+		;;
+	exec)
+		shift
+		if [ "$1" = "-" ] || [ -z "$1" ]; then code=$(cat); else code="$*"; fi
+		exec_code "$code"
+		;;
+	repl)
+		need_console
+		pause_agent
+		if command -v picocom >/dev/null; then
+			picocom -q -b 115200 "$CONSOLE"
+		else
+			echo "Ctrl-X leaves"
+			busybox microcom -s 115200 "$CONSOLE"
+		fi
+		;;
+	send)
+		shift
+		cmd_send "$@"
+		;;
+	deploy)
+		cmd_deploy "$2"
+		;;
+	reset)
+		exec_reset "import microcontroller
+microcontroller.reset()"
+		wait_for 20 find_console || die "the MCU did not come back"
+		echo "reset"
+		;;
+	bootloader)
+		cmd_bootloader
+		;;
+	backup)
+		cmd_backup "$2"
+		;;
+	flash)
+		cmd_flash "$2"
+		;;
+	*)
+		sed -n '/^# Usage:/,/^#$/s/^# \{0,1\}//p' "$0"
+		[ -n "$1" ] && [ "$1" != "-h" ] && [ "$1" != "--help" ] && exit 1
+		;;
+esac

@@ -1,0 +1,8 @@
+config BR2_PACKAGE_LIMEBOARD_MCU
+	bool "limeboard-mcu"
+	select BR2_PACKAGE_DFU_UTIL
+	help
+	  Tools for the Limeboard's STM32F401 (CircuitPython): run code
+	  on it, open its REPL, install the bridge used by limeboard-ha,
+	  and back up or reflash its flash through the ROM bootloader
+	  (USB DFU) without touching a jumper.
