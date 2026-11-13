@@ -9,8 +9,11 @@
 #
 #   ping                      {"t": "pong", "version": N}
 #   get                       {"t": "state", ...}
-#   set <output> <0|1>        LED (led_r, led_g, led_b) or header pin in
-#                             output mode (GPIOn); answers with the state
+#   rgb <r> <g> <b>           RGB LED colour, 0-255 per channel; answers with
+#                             the state
+#   led <on|off>              RGB LED on (last colour, white at first) or off
+#   set <GPIOn> <0|1>         header pin in output mode; answers with the
+#                             state
 #   mode <GPIOn> <mode>       header pin: in, in_up, in_down, out or off
 #   press <key> <ms>          hold a phone key: vol_up, vol_down, camera,
 #                             power (driving the line high presses it)
@@ -18,6 +21,10 @@
 # {"t": "hello"} is sent when the bridge starts, and a state object
 # whenever the user button or a header input changes. Errors come back as
 # {"t": "error", "msg": ...}.
+#
+# Only the blue LED pin has a PWM timer, so each channel is simply on or off
+# (on from 128): eight colours. The state reports the colour as shown, with
+# r, g and b at 0 or 255.
 import json
 import sys
 import time
@@ -38,10 +45,21 @@ KEYS = {
 }
 HEADER = {name: getattr(board, name) for name in dir(board) if name.startswith("GPIO")}
 
-leds = {}
-for name, pin in (("led_r", board.LED_R), ("led_g", board.LED_G), ("led_b", board.LED_B)):
-    leds[name] = digitalio.DigitalInOut(pin)
-    leds[name].switch_to_output(value=False)
+leds = []
+for pin in (board.LED_R, board.LED_G, board.LED_B):
+    io = digitalio.DigitalInOut(pin)
+    io.switch_to_output(value=False)
+    leds.append(io)
+# Colour restored by "led on"
+last_rgb = (True, True, True)
+
+
+def set_rgb(rgb):
+    global last_rgb
+    for io, on in zip(leds, rgb):
+        io.value = on
+    if any(rgb):
+        last_rgb = rgb
 
 button = digitalio.DigitalInOut(board.BTN)
 button.switch_to_input()
@@ -57,8 +75,9 @@ def state():
         "vdd": round(microcontroller.cpu.voltage, 3),
         "btn": int(button.value),
     }
-    for name, io in leds.items():
-        s[name] = int(io.value)
+    s["led"] = int(any(io.value for io in leds))
+    for name, io in zip(("r", "g", "b"), leds):
+        s[name] = 255 if io.value else 0
     for name, (io, mode) in header.items():
         s[name] = int(io.value)
     return s
@@ -112,11 +131,15 @@ def handle(line):
         return {"t": "pong", "version": VERSION}
     if cmd == "get":
         return state()
+    if cmd == "rgb" and len(words) == 4:
+        set_rgb(tuple(int(w) >= 128 for w in words[1:]))
+        return state()
+    if cmd == "led" and len(words) == 2 and words[1] in ("on", "off"):
+        set_rgb(last_rgb if words[1] == "on" else (False, False, False))
+        return state()
     if cmd == "set" and len(words) == 3:
         name, value = words[1], words[2] == "1"
-        if name in leds:
-            leds[name].value = value
-        elif name in header and header[name][1] == "out":
+        if name in header and header[name][1] == "out":
             header[name][0].value = value
         else:
             raise ValueError("not an output: " + name)

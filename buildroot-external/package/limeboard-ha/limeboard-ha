@@ -82,9 +82,9 @@ publish_discovery() {
 	AVAIL_EXTRA=",{\"topic\":\"$BASE/mcu/status\"}"
 	discovery sensor mcu_temp "MCU temperature" "$M,\"value_template\":\"{{ value_json.temp }}\",\"device_class\":\"temperature\",\"unit_of_measurement\":\"°C\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\""
 	discovery binary_sensor button "Button" "$M,\"value_template\":\"{{ 'ON' if value_json.btn else 'OFF' }}\",\"icon\":\"mdi:gesture-tap-button\""
-	for c in r:red g:green b:blue; do
-		discovery switch "led_${c%%:*}" "LED ${c#*:}" "$M,\"value_template\":\"{{ 'ON' if value_json.led_${c%%:*} else 'OFF' }}\",\"command_topic\":\"$BASE/cmd/led_${c%%:*}\",\"icon\":\"mdi:led-on\""
-	done
+	# One RGB light. The bridge reports the colour it shows (each channel 0
+	# or 255), so Home Assistant's colour follows what the LED can do.
+	discovery light led "LED" "$M,\"schema\":\"template\",\"command_topic\":\"$BASE/cmd/led\",\"command_on_template\":\"{% if red is defined %}rgb {{ red }} {{ green }} {{ blue }}{% else %}on{% endif %}\",\"command_off_template\":\"off\",\"state_template\":\"{{ 'on' if value_json.led else 'off' }}\",\"red_template\":\"{{ value_json.r }}\",\"green_template\":\"{{ value_json.g }}\",\"blue_template\":\"{{ value_json.b }}\""
 	discovery button press_vol_up "Press volume up" "\"command_topic\":\"$BASE/cmd/press_vol_up\",\"icon\":\"mdi:volume-plus\""
 	discovery button press_vol_down "Press volume down" "\"command_topic\":\"$BASE/cmd/press_vol_down\",\"icon\":\"mdi:volume-minus\""
 	discovery button press_camera "Press camera key" "\"command_topic\":\"$BASE/cmd/press_camera\",\"icon\":\"mdi:camera\""
@@ -211,7 +211,19 @@ handle_commands() {
 				pub -r -t "$BASE/status" -m offline
 				reboot
 				;;
-			led_r|led_g|led_b|GPIO*)
+			led)
+				case "$payload" in
+					on|off) mcu_send "led $payload" ;;
+					rgb\ *)
+						# Only "rgb <n> <n> <n>" reaches the MCU
+						set -- $payload
+						if [ $# -eq 4 ] && [ "$2$3$4" -eq "$2$3$4" ] 2>/dev/null; then
+							mcu_send "rgb $2 $3 $4"
+						fi
+						;;
+				esac
+				;;
+			GPIO*)
 				[ "$payload" = ON ] && v=1 || v=0
 				mcu_send "set $name $v"
 				;;
