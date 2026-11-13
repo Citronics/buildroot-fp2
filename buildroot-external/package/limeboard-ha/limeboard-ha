@@ -77,6 +77,32 @@ publish_discovery() {
 	discovery sensor ip "IP address" "$S,\"value_template\":\"{{ value_json.ip }}\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:ip-network\""
 	discovery button reboot "Reboot" "\"command_topic\":\"$BASE/cmd/reboot\",\"device_class\":\"restart\",\"entity_category\":\"config\""
 
+	# Phone sensors (ADSP), sampled once per interval: only those present
+	if smgr_dev accel > /dev/null; then
+		for a in x y z; do
+			discovery sensor "accel_$a" "Acceleration $a" "$S,\"value_template\":\"{{ value_json.accel_$a }}\",\"unit_of_measurement\":\"m/s²\",\"state_class\":\"measurement\",\"icon\":\"mdi:axis-arrow\""
+		done
+		# Angle from lying flat, computed by Home Assistant (busybox awk may
+		# have no math functions)
+		discovery sensor tilt "Tilt" "$S,\"value_template\":\"{{ (atan2(sqrt(value_json.accel_x ** 2 + value_json.accel_y ** 2), value_json.accel_z) * 180 / pi) | round(1) }}\",\"unit_of_measurement\":\"°\",\"state_class\":\"measurement\",\"icon\":\"mdi:angle-acute\""
+	fi
+	if smgr_dev gyro > /dev/null; then
+		for a in x y z; do
+			discovery sensor "gyro_$a" "Rotation $a" "$S,\"value_template\":\"{{ value_json.gyro_$a }}\",\"unit_of_measurement\":\"rad/s\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:rotate-3d-variant\""
+		done
+	fi
+	if smgr_dev mag > /dev/null; then
+		for a in x y z; do
+			discovery sensor "mag_$a" "Magnetic field $a" "$S,\"value_template\":\"{{ value_json.mag_$a }}\",\"unit_of_measurement\":\"G\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:magnet\""
+		done
+	fi
+	if smgr_dev light > /dev/null; then
+		discovery sensor illuminance "Illuminance" "$S,\"value_template\":\"{{ value_json.illuminance }}\",\"device_class\":\"illuminance\",\"unit_of_measurement\":\"lx\",\"state_class\":\"measurement\""
+	fi
+	if smgr_dev prox > /dev/null; then
+		discovery binary_sensor proximity "Proximity" "$S,\"value_template\":\"{{ 'ON' if value_json.proximity > 0 else 'OFF' }}\",\"icon\":\"mdi:hand-wave\""
+	fi
+
 	# STM32 entities: unavailable while the bridge does not answer
 	M="\"state_topic\":\"$BASE/mcu\""
 	AVAIL_EXTRA=",{\"topic\":\"$BASE/mcu/status\"}"
@@ -103,6 +129,59 @@ publish_discovery() {
 
 num_or_null() { [ -n "$1" ] && echo "$1" || echo null; }
 
+# The phone's sensors, served by the ADSP (SMGR) as buffered IIO devices
+smgr_dev() {
+	for d in /sys/bus/iio/devices/iio:device*; do
+		[ "$(cat "$d/name" 2>/dev/null)" = "qcom-smgr-$1" ] && { echo "$d"; return 0; }
+	done
+	return 1
+}
+
+# smgr_read <sensor> <sample bytes> <channels>: one fresh sample, scaled.
+# A sample is int32 channels, padding and an int64 timestamp.
+smgr_read() {
+	d=$(smgr_dev "$1") || return 1
+	scale=$(cat "$d"/in_*_scale 2>/dev/null | head -1)
+	echo 0 > "$d/buffer/enable" 2>/dev/null
+	for f in "$d"/scan_elements/in_*_en; do echo 1 > "$f"; done
+	echo 1 > "$d/buffer/length"
+	echo 1 > "$d/buffer/enable" || return 1
+	rm -f "$RUN/smgr"
+	# At most 3 s for a sample (busybox may have no timeout applet)
+	dd if="/dev/${d##*/}" of="$RUN/smgr" bs="$2" count=1 2>/dev/null &
+	reader=$!
+	( sleep 3; kill "$reader" 2>/dev/null ) &
+	watchdog=$!
+	wait "$reader"
+	kill "$watchdog" 2>/dev/null
+	echo 0 > "$d/buffer/enable"
+	[ -s "$RUN/smgr" ] || return 1
+	od -A n -t d4 "$RUN/smgr" | tr -s ' \n' '  ' | awk -v s="${scale:-1}" -v n="$3" \
+		'{ for (i = 1; i <= n; i++) printf "%s%.4g", (i > 1 ? " " : ""), $i * s }'
+}
+
+# JSON members for the sensors that answer
+sensor_state() {
+	if v=$(smgr_read accel 24 3); then
+		set -- $v
+		printf ',"accel_x":%s,"accel_y":%s,"accel_z":%s' "$1" "$2" "$3"
+	fi
+	if v=$(smgr_read gyro 24 3); then
+		set -- $v
+		printf ',"gyro_x":%s,"gyro_y":%s,"gyro_z":%s' "$1" "$2" "$3"
+	fi
+	if v=$(smgr_read mag 24 3); then
+		set -- $v
+		printf ',"mag_x":%s,"mag_y":%s,"mag_z":%s' "$1" "$2" "$3"
+	fi
+	if v=$(smgr_read light 16 1); then
+		printf ',"illuminance":%s' "$v"
+	fi
+	if v=$(smgr_read prox 16 1); then
+		printf ',"proximity":%s' "$v"
+	fi
+}
+
 linux_state() {
 	t=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1)
 	[ -n "$t" ] && t=$(awk -v t="$t" 'BEGIN { printf "%.1f", t / 1000 }')
@@ -125,9 +204,9 @@ linux_state() {
 	# Address of the interface with the default route (not the USB gadget's)
 	ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
 	[ -n "$ip" ] || ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{ sub("/.*", "", $4); print $4; exit }')
-	printf '{"cpu_temp":%s,"cpu_freq":%s,"load":%s,"mem_used":%s,"supply_voltage":%s,"uptime":%s,"ip":"%s"}' \
+	printf '{"cpu_temp":%s,"cpu_freq":%s,"load":%s,"mem_used":%s,"supply_voltage":%s,"uptime":%s,"ip":"%s"%s}' \
 		"$(num_or_null "$t")" "$(num_or_null "$f")" "$(num_or_null "$l1")" "$(num_or_null "$mem")" \
-		"$(num_or_null "$v")" "$(num_or_null "$up")" "$ip"
+		"$(num_or_null "$v")" "$(num_or_null "$up")" "$ip" "$(sensor_state)"
 }
 
 find_mcu_port() {
