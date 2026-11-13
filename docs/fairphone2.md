@@ -47,6 +47,22 @@ It requires udevd to be launched for the remoteproc to be detected. It also requ
 2. Use `nmcli connection add type gsm ifname '*' con-name gsm apn <YOUR APN>`
 3. Then type `nmcli connection up gsm`
 
+## Limeboard STM32
+
+The Limeboard's STM32F401 runs CircuitPython. It drives the RGB LED, reads the user button and the header pins (`GPIO0` to `GPIO27`), and can press the phone's keys. `limeboard-mcu` talks to it:
+
+- `limeboard-mcu info`, `limeboard-mcu exec '<python>'`, `limeboard-mcu repl`
+- `limeboard-mcu deploy` installs the bridge (`/usr/share/limeboard-mcu/code.py`), which answers commands such as `limeboard-mcu send get` or `limeboard-mcu send set led_g 1`.
+- `limeboard-mcu backup <file.bin>` and `limeboard-mcu flash <file.bin>` read and write its whole flash, firmware and CIRCUITPY drive, through the ROM bootloader (USB DFU). No jumper is needed. Keep a backup before flashing anything else.
+
+## Home Assistant
+
+`limeboard-ha` makes the board a Home Assistant device through MQTT discovery. It covers the phone's temperature, CPU frequency, load, memory, supply voltage, uptime and address, plus a reboot button. Once the bridge is deployed, it adds the STM32's temperature, button, LEDs, key presses and the header pins listed in the configuration.
+
+1. Set `MQTT_HOST` (and `MQTT_USER`/`MQTT_PASSWORD` if your broker needs them) in `/etc/limeboard-ha.conf`.
+2. Run `/etc/init.d/S95limeboard-ha restart`.
+3. The board appears in Home Assistant under Settings > Devices > MQTT.
+
 ## GPS
 
 The Qualcomm modem includes a GPS receiver. The `gps-assist` package handles downloading and injecting XTRA predicted orbit data to reduce time-to-first-fix (TTFF).
