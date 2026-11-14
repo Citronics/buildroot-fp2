@@ -1,0 +1,6 @@
+# Limeboard I/O firmware on the STM32 (pid.codes test ID 1209:0001): bind
+# the kernel's dln2 driver, which does not know this ID, to interface 0. Its
+# GPIO, I2C, SPI and ADC modules then load from their own uevents.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTR{bInterfaceNumber}=="00", \
+	ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", \
+	RUN+="/sbin/modprobe dln2", RUN+="/bin/sh -c 'echo 1209 0001 > /sys/bus/usb/drivers/dln2/new_id'"

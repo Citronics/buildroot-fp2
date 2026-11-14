@@ -1,0 +1,17 @@
+config BR2_PACKAGE_LIMEBOARD_IO
+	bool "limeboard-io"
+	depends on BR2_PACKAGE_HAS_UDEV
+	select BR2_PACKAGE_DFU_UTIL
+	help
+	  The Limeboard's STM32 with the Limeboard I/O firmware: its
+	  Raspberry Pi style header as standard Linux devices through
+	  the kernel's dln2 drivers (GPIO chip "dln2", I2C, SPI, ADC)
+	  and a USB serial port for the header UART. Installs the udev
+	  rule that binds dln2 to the firmware's USB ID, and dfu-util
+	  to update the firmware.
+
+	  Needs CONFIG_MFD_DLN2, GPIO_DLN2, I2C_DLN2, SPI_DLN2 and
+	  DLN2_ADC in the kernel.
+
+comment "limeboard-io needs udev"
+	depends on !BR2_PACKAGE_HAS_UDEV
