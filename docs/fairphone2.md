@@ -47,21 +47,34 @@ It requires udevd to be launched for the remoteproc to be detected. It also requ
 2. Use `nmcli connection add type gsm ifname '*' con-name gsm apn <YOUR APN>`
 3. Then type `nmcli connection up gsm`
 
-## Limeboard STM32
-
-The Limeboard's STM32F401 runs CircuitPython. It drives the RGB LED, reads the user button and the header pins (`GPIO0` to `GPIO27`), and can press the phone's keys. `limeboard-mcu` talks to it:
-
-- `limeboard-mcu info`, `limeboard-mcu exec '<python>'`, `limeboard-mcu repl`
-- `limeboard-mcu deploy` installs the bridge (`/usr/share/limeboard-mcu/code.py`), which answers commands such as `limeboard-mcu send get` or `limeboard-mcu send rgb 0 255 0`.
-- `limeboard-mcu backup <file.bin>` and `limeboard-mcu flash <file.bin>` read and write its whole flash, firmware and CIRCUITPY drive, through the ROM bootloader (USB DFU). No jumper is needed. Keep a backup before flashing anything else.
-
 ## Home Assistant
 
-`limeboard-ha` makes the board a Home Assistant device through MQTT discovery. It covers the phone's temperature, CPU frequency, load, memory, supply voltage, uptime and address, its accelerometer (with a tilt angle), gyroscope and magnetometer, and its light and proximity sensors when present, streamed every `SENSOR_INTERVAL` (1 s by default), plus a reboot button. Once the bridge is deployed, it adds the STM32's temperature, button, RGB LED (a light with 8 colours: only blue has PWM), key presses and the header pins listed in the configuration.
+`limeboard-ha` (one Python script, paho-mqtt) makes the Limeboard a Home Assistant device through MQTT discovery: the phone's temperature, CPU frequency, load, memory, supply voltage, uptime and address, its accelerometer (with a tilt angle), gyroscope, magnetometer, and light and proximity sensors when present (every second), a reboot button, and the STM32's RGB LED, button and the phone's volume and camera keys.
 
-1. Set `MQTT_HOST` (and `MQTT_USER`/`MQTT_PASSWORD` if your broker needs them) in `/etc/limeboard-ha.conf`.
-2. Run `/etc/init.d/S95limeboard-ha restart`.
-3. The board appears in Home Assistant under Settings > Devices > MQTT.
+1. In Home Assistant: install the Mosquitto broker add-on, add the MQTT integration, and create a user for the board (`homeassistant` is reserved by the add-on).
+2. On the board: set `MQTT_HOST`, `MQTT_USER` and `MQTT_PASSWORD` in `/etc/limeboard-ha.conf`, then run `/etc/init.d/S95limeboard-ha restart`.
+3. For the STM32 entities, copy the bridge to the STM32's CircuitPython drive: `mount /dev/disk/by-label/CIRCUITPY /mnt && cp /usr/share/limeboard-ha/code.py /mnt/ && umount /mnt`.
+
+The board appears under Settings > Devices & services > MQTT.
+
+## Limeboard STM32
+
+The STM32F401 runs CircuitPython; its REPL is on `/dev/ttyACM0` (`microcom -s 115200 /dev/ttyACM0`, Ctrl-C; stop `limeboard-ha` first, it uses the same port). It drives the RGB LED (`board.LED_R/G/B`), reads the user button (`board.BTN`) and the header pins (`board.GPIO0` to `GPIO27`), and presses the phone's keys by driving `board.FP_BUT_UP`, `FP_BUT_DWN`, `FP_CAM_BUT` or `FP_PWRKEY` high.
+
+To back up or reflash it, reboot it into its ROM bootloader (USB DFU) from the REPL, no jumper needed:
+
+```python
+import microcontroller
+microcontroller.on_next_reset(microcontroller.RunMode.BOOTLOADER)
+microcontroller.reset()
+```
+
+then read the whole flash (firmware and CIRCUITPY drive) or write an image; both restart CircuitPython:
+
+```sh
+dfu-util -d 0483:df11 -a 0 -s 0x08000000:524288:leave -U backup.bin
+dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D backup.bin
+```
 
 ## GPS
 
