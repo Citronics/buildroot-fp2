@@ -2,13 +2,14 @@
 """limeboard-ha: the Limeboard as a Home Assistant device, over MQTT discovery.
 
 Publishes the phone's system state every INTERVAL seconds, its motion and
-light sensors every SENSOR_INTERVAL seconds, and, when the STM32 runs the
-bridge (code.py on its CIRCUITPY drive), the STM32's RGB LED, button and
-the phone's keys. Settings: /etc/limeboard-ha.conf.
+light sensors every SENSOR_INTERVAL seconds, and the board's RGB LED and
+button, which the Limeboard I/O firmware exposes as lines 28-31 of the
+"dln2" GPIO chip. Settings: /etc/limeboard-ha.conf.
 """
 import glob
 import json
 import os
+import select
 import signal
 import socket
 import struct
@@ -16,7 +17,6 @@ import threading
 import time
 
 import paho.mqtt.client as mqtt
-import serial
 
 CONF = os.environ.get("LIMEBOARD_HA_CONF", "/etc/limeboard-ha.conf")
 
@@ -48,8 +48,6 @@ DEVICE = {"identifiers": [NODE], "name": conf.get("DEVICE_NAME", f"Limeboard {se
           "manufacturer": "Citronics", "model": "Limeboard (Fairphone 2)", "sw_version": os.uname().release}
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"{NODE}-{os.getpid()}")
-mcu = None
-mcu_lock = threading.Lock()
 
 
 def publish(topic, payload, retain=True):
@@ -58,11 +56,11 @@ def publish(topic, payload, retain=True):
 
 # Home Assistant entities ---------------------------------------------------
 
-def entity(component, obj, name, topic=None, value=None, mcu_entity=False, **extra):
+def entity(component, obj, name, topic=None, value=None, io_entity=False, **extra):
     cfg = {"name": name, "unique_id": f"{NODE}_{obj}", "device": DEVICE,
            "availability_mode": "all", "availability": [{"topic": f"{BASE}/status"}]}
-    if mcu_entity:
-        cfg["availability"].append({"topic": f"{BASE}/mcu/status"})
+    if io_entity:  # needs the STM32 with the Limeboard I/O firmware
+        cfg["availability"].append({"topic": f"{BASE}/io/status"})
     if topic:
         cfg["state_topic"] = f"{BASE}/{topic}"
     if value:
@@ -95,16 +93,13 @@ def discovery():
         entity("sensor", "illuminance", "Illuminance", "sensors", "value_json.light", device_class="illuminance", unit_of_measurement="lx", **m)
     if "prox" in SENSORS:
         entity("binary_sensor", "proximity", "Proximity", "sensors", "'ON' if value_json.prox > 0 else 'OFF'")
-    # STM32 (bridge): the LED shows 8 colours, only its blue pin has PWM
-    entity("sensor", "mcu_temp", "MCU temperature", "mcu", "value_json.temp", True, device_class="temperature",
-           unit_of_measurement="°C", entity_category="diagnostic", **m)
-    entity("binary_sensor", "button", "Button", "mcu", "'ON' if value_json.btn else 'OFF'", True)
-    entity("light", "led", "LED", "mcu", None, True, schema="template", command_topic=f"{BASE}/cmd/led",
+    # Board LED and button (GPIO lines): the LED shows 8 colours, on or off
+    # per channel
+    entity("binary_sensor", "button", "Button", "io", "'ON' if value_json.btn else 'OFF'", True)
+    entity("light", "led", "LED", "io", None, True, schema="template", command_topic=f"{BASE}/cmd/led",
            command_on_template="{% if red is defined %}rgb {{ red }} {{ green }} {{ blue }}{% else %}on{% endif %}",
            command_off_template="off", state_template="{{ 'on' if value_json.led else 'off' }}",
            red_template="{{ value_json.r }}", green_template="{{ value_json.g }}", blue_template="{{ value_json.b }}")
-    for key, name in (("vol_up", "volume up"), ("vol_down", "volume down"), ("camera", "camera key")):
-        entity("button", f"press_{key}", f"Press {name}", mcu_entity=True, command_topic=f"{BASE}/cmd/press_{key}")
 
 
 # Phone state -----------------------------------------------------------------
@@ -170,41 +165,62 @@ def sensors_off():
         open(path + "/buffer/enable", "w").write("0")
 
 
-# STM32 bridge ------------------------------------------------------------------
+# Board LED and button: GPIO lines 28-31 of the "dln2" chip (sysfs) ------------
 
-def mcu_send(line):
-    with mcu_lock:
-        if mcu:
-            mcu.write((line + "\n").encode())
+LED_LINES, BUTTON_LINE = (28, 29, 30), 31
+io = {"base": None, "rgb": (1, 1, 1), "state": {"led": 0, "r": 0, "g": 0, "b": 0, "btn": 0}}
 
 
-def mcu_loop():
-    global mcu
+def gpio(line):
+    return f"/sys/class/gpio/gpio{io['base'] + line}"
+
+
+def gpio_setup(line, direction, edge=None):
+    if not os.path.exists(gpio(line)):
+        with open("/sys/class/gpio/export", "w") as f:
+            f.write(str(io["base"] + line))
+    with open(gpio(line) + "/direction", "w") as f:
+        f.write(direction)
+    if edge:
+        with open(gpio(line) + "/edge", "w") as f:
+            f.write(edge)
+
+
+def set_led(rgb):
+    for line, on in zip(LED_LINES, rgb):
+        with open(gpio(line) + "/value", "w") as f:
+            f.write("1" if on else "0")
+    if any(rgb):
+        io["rgb"] = rgb
+    io["state"].update(led=int(any(rgb)), r=255 * rgb[0], g=255 * rgb[1], b=255 * rgb[2])
+    publish(f"{BASE}/io", io["state"])
+
+
+def io_loop():
     while True:
-        ports = glob.glob("/dev/serial/by-id/*Limeboard*STM32*-if00")
         try:
-            if not ports:
-                raise serial.SerialException("no STM32")
-            with serial.Serial(ports[0], timeout=1) as port:
-                time.sleep(1.5)  # CircuitPython drops output until it sees the port open
-                mcu = port
-                mcu_send("get")
-                for line in iter(port.readline, None):
-                    text = line.decode(errors="replace")
-                    try:  # skips CircuitPython's own messages
-                        msg = json.loads(text[text.index("{"):])
-                    except ValueError:
-                        continue
-                    if msg.get("t") == "state":
-                        publish(f"{BASE}/mcu", msg)
-                        publish(f"{BASE}/mcu/status", "online")
-                    elif msg.get("t") == "hello":  # the bridge (re)started
-                        mcu_send("get")
-        except (serial.SerialException, OSError, ValueError):
-            pass
-        mcu = None
-        publish(f"{BASE}/mcu/status", "offline")
-        time.sleep(10)
+            chips = [c for c in glob.glob("/sys/class/gpio/gpiochip*") if read(c + "/label") == "dln2"]
+            if not chips:
+                raise OSError("no Limeboard I/O")
+            io["base"] = int(read(chips[0] + "/base"))
+            for line in LED_LINES:
+                gpio_setup(line, "out")
+            gpio_setup(BUTTON_LINE, "in", "both")
+            set_led((0, 0, 0))
+            publish(f"{BASE}/io/status", "online")
+            with open(gpio(BUTTON_LINE) + "/value") as f:
+                poller = select.poll()
+                poller.register(f, select.POLLPRI | select.POLLERR)
+                while True:  # an edge, or every minute
+                    f.seek(0)
+                    io["state"]["btn"] = int(f.read().strip())
+                    publish(f"{BASE}/io", io["state"])
+                    poller.poll(60000)
+        except (OSError, ValueError):
+            pass  # absent, or gone with a USB reset
+        io["base"] = None
+        publish(f"{BASE}/io/status", "offline")
+        time.sleep(5)
 
 
 # MQTT ------------------------------------------------------------------------
@@ -220,14 +236,17 @@ def on_message(client, userdata, msg):
     if cmd == "reboot":
         publish(f"{BASE}/status", "offline")
         os.system("reboot")
-    elif cmd == "led" and (payload in ("on", "off") or payload.startswith("rgb ")):
+    elif cmd == "led" and io["base"] is not None:
         words = payload.split()
-        if payload in ("on", "off"):
-            mcu_send("led " + payload)
-        elif len(words) == 4 and all(w.isdigit() for w in words[1:]):
-            mcu_send(payload)
-    elif cmd in ("press_vol_up", "press_vol_down", "press_camera"):
-        mcu_send(f"press {cmd.removeprefix('press_')} 300")
+        try:
+            if payload == "on":
+                set_led(io["rgb"])
+            elif payload == "off":
+                set_led((0, 0, 0))
+            elif len(words) == 4 and words[0] == "rgb":
+                set_led(tuple(int(int(w) >= 128) for w in words[1:]))  # on from 128
+        except (OSError, ValueError):
+            pass
 
 
 def stop(*_):
@@ -250,7 +269,7 @@ if __name__ == "__main__":
     client.connect_async(conf["MQTT_HOST"], int(conf["MQTT_PORT"]))
     client.loop_start()  # reconnects by itself
     print(f"limeboard-ha: {NODE} -> {conf['MQTT_HOST']}:{conf['MQTT_PORT']}", flush=True)
-    threading.Thread(target=mcu_loop, daemon=True).start()
+    threading.Thread(target=io_loop, daemon=True).start()
     if SENSORS:
         threading.Thread(target=sensor_loop, daemon=True).start()
     while True:
