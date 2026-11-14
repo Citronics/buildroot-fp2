@@ -1,473 +1,258 @@
-#!/bin/sh
-#
-# limeboard-ha - make the Limeboard a Home Assistant device over MQTT
-#
-# Publishes MQTT discovery for the phone (temperature, CPU frequency, load,
-# memory, supply voltage, uptime, IP address, reboot) and, when the STM32
-# bridge runs (limeboard-mcu deploy), for the STM32: its temperature, user
-# button, RGB LED, the phone's keys and the configured header pins.
-#
-# Topics: <base>/status (online/offline, last will), <base>/state and
-# <base>/mcu (JSON states), <base>/cmd/<name> (commands), with
-# <base> = limeboard/<node id>.
+#!/usr/bin/env python3
+"""limeboard-ha: the Limeboard as a Home Assistant device, over MQTT discovery.
 
-CONF=${LIMEBOARD_HA_CONF:-/etc/limeboard-ha.conf}
-RUN=/run/limeboard-ha
+Publishes the phone's system state every INTERVAL seconds, its motion and
+light sensors every SENSOR_INTERVAL seconds, and, when the STM32 runs the
+bridge (code.py on its CIRCUITPY drive), the STM32's RGB LED, button and
+the phone's keys. Settings: /etc/limeboard-ha.conf.
+"""
+import glob
+import json
+import os
+import signal
+import socket
+import struct
+import threading
+import time
 
-MQTT_HOST=""
-MQTT_PORT=1883
-MQTT_USER=""
-MQTT_PASSWORD=""
-DISCOVERY_PREFIX=homeassistant
-INTERVAL=30
-SENSOR_INTERVAL=1
-MCU_OUTPUTS=""
-MCU_INPUTS=""
-MCU_INPUT_MODE=in
-MCU_POWER_KEY=no
-[ -f "$CONF" ] && . "$CONF"
+import paho.mqtt.client as mqtt
+import serial
 
-log() { echo "limeboard-ha: $*"; }
+CONF = os.environ.get("LIMEBOARD_HA_CONF", "/etc/limeboard-ha.conf")
 
-serial=$(cat /sys/block/mmcblk0/device/serial 2>/dev/null | sed 's/^0x//')
-[ -n "$serial" ] || serial=$(cat /etc/machine-id 2>/dev/null | cut -c1-8)
-NODE_ID=${NODE_ID:-limeboard_$serial}
-DEVICE_NAME=${DEVICE_NAME:-Limeboard $serial}
-BASE=limeboard/$NODE_ID
-MCU_PORT=""
 
-# The broker and the credentials go to the clients through their options
-# files ($XDG_CONFIG_HOME/mosquitto_pub, _sub), so that the password never
-# shows on a command line (ps)
-client_options() {
-	mkdir -p "$RUN"
-	for tool in mosquitto_pub mosquitto_sub; do
-		(
-			umask 077
-			printf -- '-h %s\n-p %s\n' "$MQTT_HOST" "$MQTT_PORT"
-			if [ -n "$MQTT_USER" ]; then
-				printf -- '-u %s\n-P %s\n' "$MQTT_USER" "$MQTT_PASSWORD"
-			fi
-		) > "$RUN/$tool"
-		chmod 600 "$RUN/$tool"
-	done
-}
-export XDG_CONFIG_HOME="$RUN"
+def load_conf():
+    conf = {"MQTT_HOST": "", "MQTT_PORT": "1883", "MQTT_USER": "", "MQTT_PASSWORD": "",
+            "DISCOVERY_PREFIX": "homeassistant", "INTERVAL": "30", "SENSOR_INTERVAL": "1"}
+    with open(CONF) as f:
+        for line in f:
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.strip().split("=", 1)
+                conf[key] = value.strip("'\"")
+    return conf
 
-pub() { mosquitto_pub -q 1 "$@"; }
 
-# Run in the background, the client replaces the subshell, so that $! is
-# the client itself
-sub_exec() { exec mosquitto_sub "$@"; }
-pub_exec() { exec mosquitto_pub "$@"; }
+def read(path, default=None):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
 
-json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-# discovery <component> <object> <name> <extra JSON members>
-discovery() {
-	pub -r -t "$DISCOVERY_PREFIX/$1/$NODE_ID/$2/config" -m "{\"name\":\"$3\",\"unique_id\":\"${NODE_ID}_$2\",\"availability_mode\":\"all\",\"availability\":[{\"topic\":\"$BASE/status\"}$AVAIL_EXTRA],\"device\":$DEVICE,$4}"
-}
+conf = load_conf()
+serial_no = (read("/sys/block/mmcblk0/device/serial") or read("/etc/machine-id", "")[:8]).replace("0x", "")
+NODE = conf.get("NODE_ID", f"limeboard_{serial_no}")
+BASE = f"limeboard/{NODE}"
+DEVICE = {"identifiers": [NODE], "name": conf.get("DEVICE_NAME", f"Limeboard {serial_no}"),
+          "manufacturer": "Citronics", "model": "Limeboard (Fairphone 2)", "sw_version": os.uname().release}
 
-publish_discovery() {
-	kver=$(uname -r)
-	DEVICE="{\"identifiers\":[\"$NODE_ID\"],\"name\":\"$(json_str "$DEVICE_NAME")\",\"manufacturer\":\"Citronics\",\"model\":\"Limeboard (Fairphone 2)\",\"sw_version\":\"$kver\"}"
-	S="\"state_topic\":\"$BASE/state\""
-	AVAIL_EXTRA=""
-	discovery sensor cpu_temp "CPU temperature" "$S,\"value_template\":\"{{ value_json.cpu_temp }}\",\"device_class\":\"temperature\",\"unit_of_measurement\":\"°C\",\"state_class\":\"measurement\""
-	discovery sensor cpu_freq "CPU frequency" "$S,\"value_template\":\"{{ value_json.cpu_freq }}\",\"device_class\":\"frequency\",\"unit_of_measurement\":\"MHz\",\"state_class\":\"measurement\""
-	discovery sensor load "Load" "$S,\"value_template\":\"{{ value_json.load }}\",\"state_class\":\"measurement\",\"icon\":\"mdi:chip\""
-	discovery sensor mem_used "Memory used" "$S,\"value_template\":\"{{ value_json.mem_used }}\",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\",\"icon\":\"mdi:memory\""
-	discovery sensor supply_voltage "Supply voltage" "$S,\"value_template\":\"{{ value_json.supply_voltage }}\",\"device_class\":\"voltage\",\"unit_of_measurement\":\"V\",\"state_class\":\"measurement\""
-	discovery sensor uptime "Uptime" "$S,\"value_template\":\"{{ value_json.uptime }}\",\"device_class\":\"duration\",\"unit_of_measurement\":\"s\",\"entity_category\":\"diagnostic\""
-	discovery sensor ip "IP address" "$S,\"value_template\":\"{{ value_json.ip }}\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:ip-network\""
-	discovery button reboot "Reboot" "\"command_topic\":\"$BASE/cmd/reboot\",\"device_class\":\"restart\",\"entity_category\":\"config\""
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"{NODE}-{os.getpid()}")
+mcu = None
+mcu_lock = threading.Lock()
 
-	# Phone sensors (ADSP), streamed every SENSOR_INTERVAL: only those present
-	SN="\"state_topic\":\"$BASE/sensors\""
-	if smgr_dev accel > /dev/null; then
-		for a in x y z; do
-			discovery sensor "accel_$a" "Acceleration $a" "$SN,\"value_template\":\"{{ value_json.accel_$a }}\",\"unit_of_measurement\":\"m/s²\",\"state_class\":\"measurement\",\"icon\":\"mdi:axis-arrow\""
-		done
-		# Angle from lying flat, computed by Home Assistant (busybox awk may
-		# have no math functions)
-		discovery sensor tilt "Tilt" "$SN,\"value_template\":\"{{ (atan2(sqrt(value_json.accel_x ** 2 + value_json.accel_y ** 2), value_json.accel_z) * 180 / pi) | round(1) }}\",\"unit_of_measurement\":\"°\",\"state_class\":\"measurement\",\"icon\":\"mdi:angle-acute\""
-	fi
-	if smgr_dev gyro > /dev/null; then
-		for a in x y z; do
-			discovery sensor "gyro_$a" "Rotation $a" "$SN,\"value_template\":\"{{ value_json.gyro_$a }}\",\"unit_of_measurement\":\"rad/s\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:rotate-3d-variant\""
-		done
-	fi
-	if smgr_dev mag > /dev/null; then
-		for a in x y z; do
-			discovery sensor "mag_$a" "Magnetic field $a" "$SN,\"value_template\":\"{{ value_json.mag_$a }}\",\"unit_of_measurement\":\"G\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:magnet\""
-		done
-	fi
-	if smgr_dev light > /dev/null; then
-		discovery sensor illuminance "Illuminance" "$SN,\"value_template\":\"{{ value_json.illuminance }}\",\"device_class\":\"illuminance\",\"unit_of_measurement\":\"lx\",\"state_class\":\"measurement\""
-	fi
-	if smgr_dev prox > /dev/null; then
-		discovery binary_sensor proximity "Proximity" "$SN,\"value_template\":\"{{ 'ON' if value_json.proximity > 0 else 'OFF' }}\",\"icon\":\"mdi:hand-wave\""
-	fi
 
-	# STM32 entities: unavailable while the bridge does not answer
-	M="\"state_topic\":\"$BASE/mcu\""
-	AVAIL_EXTRA=",{\"topic\":\"$BASE/mcu/status\"}"
-	discovery sensor mcu_temp "MCU temperature" "$M,\"value_template\":\"{{ value_json.temp }}\",\"device_class\":\"temperature\",\"unit_of_measurement\":\"°C\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\""
-	discovery binary_sensor button "Button" "$M,\"value_template\":\"{{ 'ON' if value_json.btn else 'OFF' }}\",\"icon\":\"mdi:gesture-tap-button\""
-	# One RGB light. The bridge reports the colour it shows (each channel 0
-	# or 255), so Home Assistant's colour follows what the LED can do.
-	discovery light led "LED" "$M,\"schema\":\"template\",\"command_topic\":\"$BASE/cmd/led\",\"command_on_template\":\"{% if red is defined %}rgb {{ red }} {{ green }} {{ blue }}{% else %}on{% endif %}\",\"command_off_template\":\"off\",\"state_template\":\"{{ 'on' if value_json.led else 'off' }}\",\"red_template\":\"{{ value_json.r }}\",\"green_template\":\"{{ value_json.g }}\",\"blue_template\":\"{{ value_json.b }}\""
-	discovery button press_vol_up "Press volume up" "\"command_topic\":\"$BASE/cmd/press_vol_up\",\"icon\":\"mdi:volume-plus\""
-	discovery button press_vol_down "Press volume down" "\"command_topic\":\"$BASE/cmd/press_vol_down\",\"icon\":\"mdi:volume-minus\""
-	discovery button press_camera "Press camera key" "\"command_topic\":\"$BASE/cmd/press_camera\",\"icon\":\"mdi:camera\""
-	if [ "$MCU_POWER_KEY" = yes ]; then
-		discovery button press_power "Press power key" "\"command_topic\":\"$BASE/cmd/press_power\",\"icon\":\"mdi:power\""
-	else
-		pub -r -t "$DISCOVERY_PREFIX/button/$NODE_ID/press_power/config" -n
-	fi
-	for p in $MCU_OUTPUTS; do
-		discovery switch "$(echo "$p" | tr "[:upper:]" "[:lower:]")" "$p" "$M,\"value_template\":\"{{ 'ON' if value_json.$p else 'OFF' }}\",\"command_topic\":\"$BASE/cmd/$p\""
-	done
-	for p in $MCU_INPUTS; do
-		discovery binary_sensor "$(echo "$p" | tr "[:upper:]" "[:lower:]")" "$p" "$M,\"value_template\":\"{{ 'ON' if value_json.$p else 'OFF' }}\""
-	done
-}
+def publish(topic, payload, retain=True):
+    client.publish(topic, payload if isinstance(payload, str) else json.dumps(payload), qos=1, retain=retain)
 
-num_or_null() { [ -n "$1" ] && echo "$1" || echo null; }
 
-# The phone's sensors, served by the ADSP (SMGR) as buffered IIO devices
-smgr_dev() {
-	for d in /sys/bus/iio/devices/iio:device*; do
-		[ "$(cat "$d/name" 2>/dev/null)" = "qcom-smgr-$1" ] && { echo "$d"; return 0; }
-	done
-	return 1
-}
+# Home Assistant entities ---------------------------------------------------
 
-# The streamed sensors: name, sample bytes (int32 channels, padding, int64
-# timestamp), channels, JSON keys
-SMGR_SENSORS="accel:24:3:accel_x,accel_y,accel_z gyro:24:3:gyro_x,gyro_y,gyro_z mag:24:3:mag_x,mag_y,mag_z light:16:1:illuminance prox:16:1:proximity"
+def entity(component, obj, name, topic=None, value=None, mcu_entity=False, **extra):
+    cfg = {"name": name, "unique_id": f"{NODE}_{obj}", "device": DEVICE,
+           "availability_mode": "all", "availability": [{"topic": f"{BASE}/status"}]}
+    if mcu_entity:
+        cfg["availability"].append({"topic": f"{BASE}/mcu/status"})
+    if topic:
+        cfg["state_topic"] = f"{BASE}/{topic}"
+    if value:
+        cfg["value_template"] = "{{ " + value + " }}"
+    cfg.update(extra)
+    publish(f"{conf['DISCOVERY_PREFIX']}/{component}/{NODE}/{obj}/config", cfg)
 
-smgr_stream() {
-	for s in $SMGR_SENSORS; do
-		d=$(smgr_dev "${s%%:*}") || continue
-		echo 0 > "$d/buffer/enable" 2>/dev/null
-		[ "$1" = off ] && continue
-		for f in "$d"/scan_elements/in_*_en; do echo 1 > "$f"; done
-		echo 1 > "$d/buffer/length"
-		echo 1 > "$d/buffer/enable"
-	done
-}
 
-# smgr_sample <device> <sample bytes> <channels> <scale>: the newest sample,
-# scaled. The buffer holds one sample, possibly old: read two, keep the last.
-# A read that never returns is caught by the main loop (heartbeat).
-smgr_sample() {
-	rm -f "$RUN/smgr"
-	dd if="/dev/${1##*/}" of="$RUN/smgr" bs="$2" count=2 2>/dev/null
-	[ -s "$RUN/smgr" ] || return 1
-	tail -c "$2" "$RUN/smgr" | od -A n -t d4 | tr -s ' \n' '  ' | awk -v s="$4" -v n="$3" \
-		'{ for (i = 1; i <= n; i++) printf "%s%.4g", (i > 1 ? " " : ""), $i * s }'
-}
+def discovery():
+    m = {"state_class": "measurement"}
+    entity("sensor", "cpu_temp", "CPU temperature", "state", "value_json.cpu_temp", device_class="temperature", unit_of_measurement="°C", **m)
+    entity("sensor", "cpu_freq", "CPU frequency", "state", "value_json.cpu_freq", device_class="frequency", unit_of_measurement="MHz", **m)
+    entity("sensor", "load", "Load", "state", "value_json.load", icon="mdi:chip", **m)
+    entity("sensor", "mem_used", "Memory used", "state", "value_json.mem_used", unit_of_measurement="%", icon="mdi:memory", **m)
+    entity("sensor", "supply_voltage", "Supply voltage", "state", "value_json.supply_voltage", device_class="voltage", unit_of_measurement="V", **m)
+    entity("sensor", "uptime", "Uptime", "state", "value_json.uptime", device_class="duration", unit_of_measurement="s", entity_category="diagnostic")
+    entity("sensor", "ip", "IP address", "state", "value_json.ip", entity_category="diagnostic", icon="mdi:ip-network")
+    entity("button", "reboot", "Reboot", command_topic=f"{BASE}/cmd/reboot", device_class="restart", entity_category="config")
+    for axis in "xyz":
+        if "accel" in SENSORS:
+            entity("sensor", f"accel_{axis}", f"Acceleration {axis}", "sensors", f"value_json.accel_{axis}", unit_of_measurement="m/s²", icon="mdi:axis-arrow", **m)
+        if "gyro" in SENSORS:
+            entity("sensor", f"gyro_{axis}", f"Rotation {axis}", "sensors", f"value_json.gyro_{axis}", unit_of_measurement="rad/s", entity_category="diagnostic", **m)
+        if "mag" in SENSORS:
+            entity("sensor", f"mag_{axis}", f"Magnetic field {axis}", "sensors", f"value_json.mag_{axis}", unit_of_measurement="G", entity_category="diagnostic", icon="mdi:magnet", **m)
+    if "accel" in SENSORS:
+        entity("sensor", "tilt", "Tilt", "sensors", "(atan2(sqrt(value_json.accel_x ** 2 + value_json.accel_y ** 2), value_json.accel_z) * 180 / pi) | round(1)",
+               unit_of_measurement="°", icon="mdi:angle-acute", **m)
+    if "light" in SENSORS:
+        entity("sensor", "illuminance", "Illuminance", "sensors", "value_json.light", device_class="illuminance", unit_of_measurement="lx", **m)
+    if "prox" in SENSORS:
+        entity("binary_sensor", "proximity", "Proximity", "sensors", "'ON' if value_json.prox > 0 else 'OFF'")
+    # STM32 (bridge): the LED shows 8 colours, only its blue pin has PWM
+    entity("sensor", "mcu_temp", "MCU temperature", "mcu", "value_json.temp", True, device_class="temperature",
+           unit_of_measurement="°C", entity_category="diagnostic", **m)
+    entity("binary_sensor", "button", "Button", "mcu", "'ON' if value_json.btn else 'OFF'", True)
+    entity("light", "led", "LED", "mcu", None, True, schema="template", command_topic=f"{BASE}/cmd/led",
+           command_on_template="{% if red is defined %}rgb {{ red }} {{ green }} {{ blue }}{% else %}on{% endif %}",
+           command_off_template="off", state_template="{{ 'on' if value_json.led else 'off' }}",
+           red_template="{{ value_json.r }}", green_template="{{ value_json.g }}", blue_template="{{ value_json.b }}")
+    for key, name in (("vol_up", "volume up"), ("vol_down", "volume down"), ("camera", "camera key")):
+        entity("button", f"press_{key}", f"Press {name}", mcu_entity=True, command_topic=f"{BASE}/cmd/press_{key}")
 
-# One JSON object with the sensors that answer
-sensors_json() {
-	out=""
-	for s in $SMGR_SENSORS; do
-		name=${s%%:*}; rest=${s#*:}
-		bytes=${rest%%:*}; rest=${rest#*:}
-		n=${rest%%:*}; keys=${rest#*:}
-		d=$(smgr_dev "$name") || continue
-		scale=$(cat "$d"/in_*_scale 2>/dev/null | head -1)
-		v=$(smgr_sample "$d" "$bytes" "$n" "${scale:-1}") || continue
-		for k in $(echo "$keys" | tr , ' '); do
-			out="$out,\"$k\":${v%% *}"
-			v=${v#* }
-		done
-	done
-	echo "{${out#,}}"
-}
 
-# limeboard-ha --sensors: stream the phone's sensors every SENSOR_INTERVAL
-# over one MQTT connection (mosquitto_pub -l publishes each line)
-sensors_main() {
-	rm -f "$RUN/sensors"
-	mkfifo "$RUN/sensors"
-	pub_exec -q 0 -r -l -t "$BASE/sensors" < "$RUN/sensors" &
-	publisher=$!
-	exec 3> "$RUN/sensors"
-	smgr_stream on
-	trap 'smgr_stream off; kill "$publisher" 2>/dev/null; exit 0' INT TERM
-	while kill -0 "$publisher" 2>/dev/null; do
-		sensors_json >&3
-		uptime_s > "$RUN/sensors-beat"
-		sleep "$SENSOR_INTERVAL"
-	done
-	smgr_stream off
-}
+# Phone state -----------------------------------------------------------------
 
-uptime_s() { cut -d. -f1 /proc/uptime; }
+def system_state():
+    temps = [int(t) for t in map(read, glob.glob("/sys/class/thermal/thermal_zone*/temp")) if t]
+    mem = dict(line.split(":") for line in open("/proc/meminfo"))
+    total, avail = (int(mem[k].split()[0]) for k in ("MemTotal", "MemAvailable"))
+    # VBAT: the battery driver, or the PM8941 ADC on a board without a battery
+    volts = None
+    for name in glob.glob("/sys/bus/iio/devices/iio:device*/name"):
+        if "adc@3100" in read(name, ""):
+            volts = read(os.path.dirname(name) + "/in_voltage6_input")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("1.1.1.1", 1))  # no packet is sent: picks the default route
+            ip = s.getsockname()[0]
+        except OSError:
+            ip = None
+    freq = read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+    return {"cpu_temp": max(temps) / 1000 if temps else None,
+            "cpu_freq": int(freq) // 1000 if freq else None,
+            "load": float(read("/proc/loadavg").split()[0]),
+            "mem_used": round((total - avail) * 100 / total, 1),
+            "supply_voltage": round(int(volts) / 1e6, 3) if volts else None,
+            "uptime": int(float(read("/proc/uptime").split()[0])), "ip": ip}
 
-# kill_tree <pid>: the process and its children (a blocked dd)
-kill_tree() {
-	for p in /proc/[0-9]*; do
-		[ "$(cut -d' ' -f4 "$p/stat" 2>/dev/null)" = "$1" ] && kill -9 "${p#/proc/}" 2>/dev/null
-	done
-	kill -9 "$1" 2>/dev/null
-}
 
-linux_state() {
-	t=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1)
-	[ -n "$t" ] && t=$(awk -v t="$t" 'BEGIN { printf "%.1f", t / 1000 }')
-	f=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)
-	[ -n "$f" ] && f=$((f / 1000))
-	read -r l1 _ < /proc/loadavg
-	up=$(cut -d. -f1 /proc/uptime)
-	mem=$(awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } END { if (t) printf "%.1f", (t - a) * 100 / t }' /proc/meminfo)
-	v=""
-	for ps in /sys/class/power_supply/*; do
-		[ "$(cat "$ps/type" 2>/dev/null)" = Battery ] || continue
-		v=$(cat "$ps/voltage_now" 2>/dev/null) && break
-	done
-	# Without a battery driver reading, VBAT from the PM8941 VADC (µV)
-	if [ -z "$v" ]; then
-		vadc=$(grep -l 'adc@3100' /sys/bus/iio/devices/iio:device*/name 2>/dev/null | head -1)
-		[ -n "$vadc" ] && v=$(cat "${vadc%/name}/in_voltage6_input" 2>/dev/null)
-	fi
-	[ -n "$v" ] && v=$(awk -v v="$v" 'BEGIN { printf "%.3f", v / 1000000 }')
-	# Address of the interface with the default route (not the USB gadget's)
-	ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
-	[ -n "$ip" ] || ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{ sub("/.*", "", $4); print $4; exit }')
-	printf '{"cpu_temp":%s,"cpu_freq":%s,"load":%s,"mem_used":%s,"supply_voltage":%s,"uptime":%s,"ip":"%s"}' \
-		"$(num_or_null "$t")" "$(num_or_null "$f")" "$(num_or_null "$l1")" "$(num_or_null "$mem")" \
-		"$(num_or_null "$v")" "$(num_or_null "$up")" "$ip"
-}
+# The phone's sensors: the ADSP serves them as buffered IIO devices. A sample
+# is int32 channels, padding, then an int64 timestamp.
+SENSOR_LAYOUT = {"accel": ("accel_x", "accel_y", "accel_z"), "gyro": ("gyro_x", "gyro_y", "gyro_z"),
+                 "mag": ("mag_x", "mag_y", "mag_z"), "light": ("light",), "prox": ("prox",)}
+SENSORS = {}
+for path in glob.glob("/sys/bus/iio/devices/iio:device*"):
+    kind = (read(path + "/name") or "").removeprefix("qcom-smgr-")
+    if kind in SENSOR_LAYOUT:
+        SENSORS[kind] = path
 
-find_mcu_port() {
-	MCU_PORT=""
-	for p in /dev/serial/by-id/*Limeboard*STM32*; do
-		[ -e "$p" ] || continue
-		case "$p" in *-if00) MCU_PORT=$(readlink -f "$p") ;; esac
-	done
-	[ -n "$MCU_PORT" ]
-}
 
-# Stopped by limeboard-mcu, which is using the console?
-mcu_paused() {
-	[ -f "$RUN/mcu-reader.pid" ] || return 1
-	[ "$(cut -d' ' -f3 "/proc/$(cat "$RUN/mcu-reader.pid")/stat" 2>/dev/null)" = T ]
-}
+def sensor_loop():
+    streams = {}
+    for kind, path in SENSORS.items():
+        open(path + "/buffer/enable", "w").write("0")
+        for en in glob.glob(path + "/scan_elements/in_*_en"):
+            open(en, "w").write("1")
+        open(path + "/buffer/length", "w").write("1")
+        open(path + "/buffer/enable", "w").write("1")
+        scale = float((glob.glob(path + "/in_*_scale") and read(glob.glob(path + "/in_*_scale")[0])) or 1)
+        size = 24 if len(SENSOR_LAYOUT[kind]) == 3 else 16
+        streams[kind] = (os.open("/dev/" + os.path.basename(path), os.O_RDONLY), size, scale)
+    while True:
+        values = {}
+        for kind, (fd, size, scale) in streams.items():
+            os.read(fd, size)  # the buffered sample may be old: the next one is fresh
+            raw = struct.unpack_from(f"<{len(SENSOR_LAYOUT[kind])}i", os.read(fd, size))
+            values.update({k: round(v * scale, 4) for k, v in zip(SENSOR_LAYOUT[kind], raw)})
+        client.publish(f"{BASE}/sensors", json.dumps(values), retain=True)
+        time.sleep(float(conf["SENSOR_INTERVAL"]))
 
-# The reader and the command handler are processes of their own: they
-# find the port themselves
-mcu_send() {
-	mcu_paused && return 1
-	[ -e "$MCU_PORT" ] || find_mcu_port || return 1
-	printf '%s\n' "$1" > "$MCU_PORT" 2>/dev/null
-}
 
-mcu_setup() {
-	for p in $MCU_OUTPUTS; do mcu_send "mode $p out"; done
-	for p in $MCU_INPUTS; do mcu_send "mode $p $MCU_INPUT_MODE"; done
-	mcu_send get
-}
+def sensors_off():
+    for path in SENSORS.values():
+        open(path + "/buffer/enable", "w").write("0")
 
-# limeboard-ha --mcu-reader <port>: forward the bridge's JSON lines to MQTT
-# until the port goes away. The console also carries CircuitPython's own
-# messages, which are skipped. limeboard-mcu stops this process (pid file)
-# while it uses the console.
-mcu_reader() {
-	echo $$ > "$RUN/mcu-reader.pid"
-	stty -F "$MCU_PORT" raw -echo 2>/dev/null
-	cr=$(printf '\r')
-	online=""
-	while IFS= read -r line; do
-		line=${line%"$cr"}
-		case "$line" in
-			'{'*'"t": "state"'*|'{'*'"t":"state"'*)
-				pub -r -t "$BASE/mcu" -m "$line"
-				if [ -z "$online" ]; then
-					pub -r -t "$BASE/mcu/status" -m online
-					touch "$RUN/mcu-online"
-					online=1
-				fi
-				;;
-			'{'*'"t": "hello"'*|'{'*'"t":"hello"'*)
-				# The bridge (re)started: pin modes are back to defaults
-				mcu_setup
-				;;
-			'{'*'"t": "error"'*|'{'*'"t":"error"'*)
-				log "MCU: $line"
-				;;
-		esac
-	done < "$MCU_PORT"
-	rm -f "$RUN/mcu-online" "$RUN/mcu-reader.pid"
-	pub -r -t "$BASE/mcu/status" -m offline
-}
 
-# The STM32 entities become available with the bridge's first state
-mcu_start() {
-	find_mcu_port || return 1
-	"$0" --mcu-reader "$MCU_PORT" &
-	MCU_READER=$!
-	# CircuitPython drops output until it has seen the port opened
-	nap 1.5
-	mcu_setup
-	log "STM32 console on $MCU_PORT"
-}
+# STM32 bridge ------------------------------------------------------------------
 
-handle_commands() {
-	while read -r topic payload; do
-		name=${topic##*/}
-		case "$name" in
-			reboot)
-				pub -r -t "$BASE/status" -m offline
-				reboot
-				;;
-			led)
-				case "$payload" in
-					on|off) mcu_send "led $payload" ;;
-					rgb\ *)
-						# Only "rgb <n> <n> <n>" reaches the MCU
-						set -- $payload
-						if [ $# -eq 4 ] && [ "$2$3$4" -eq "$2$3$4" ] 2>/dev/null; then
-							mcu_send "rgb $2 $3 $4"
-						fi
-						;;
-				esac
-				;;
-			GPIO*)
-				[ "$payload" = ON ] && v=1 || v=0
-				mcu_send "set $name $v"
-				;;
-			press_power)
-				[ "$MCU_POWER_KEY" = yes ] && mcu_send "press power 300"
-				;;
-			press_*)
-				mcu_send "press ${name#press_} 300"
-				;;
-		esac
-	done
-}
+def mcu_send(line):
+    with mcu_lock:
+        if mcu:
+            mcu.write((line + "\n").encode())
 
-# Sleep in the background so that a stop signal is handled at once
-nap() {
-	sleep "$1" &
-	wait $!
-}
 
-sensors_start() {
-	SENSORS=""
-	smgr_dev accel > /dev/null || smgr_dev light > /dev/null || return 0
-	uptime_s > "$RUN/sensors-beat"
-	"$0" --sensors &
-	SENSORS=$!
-}
+def mcu_loop():
+    global mcu
+    while True:
+        ports = glob.glob("/dev/serial/by-id/*Limeboard*STM32*-if00")
+        try:
+            if not ports:
+                raise serial.SerialException("no STM32")
+            with serial.Serial(ports[0], timeout=1) as port:
+                time.sleep(1.5)  # CircuitPython drops output until it sees the port open
+                mcu = port
+                mcu_send("get")
+                for line in iter(port.readline, None):
+                    text = line.decode(errors="replace")
+                    try:  # skips CircuitPython's own messages
+                        msg = json.loads(text[text.index("{"):])
+                    except ValueError:
+                        continue
+                    if msg.get("t") == "state":
+                        publish(f"{BASE}/mcu", msg)
+                        publish(f"{BASE}/mcu/status", "online")
+                    elif msg.get("t") == "hello":  # the bridge (re)started
+                        mcu_send("get")
+        except (serial.SerialException, OSError, ValueError):
+            pass
+        mcu = None
+        publish(f"{BASE}/mcu/status", "offline")
+        time.sleep(10)
 
-# The sensor stream is stuck (a read that never returns) or gone
-sensors_stalled() {
-	! kill -0 "$SENSORS" 2>/dev/null && return 0
-	beat=$(cat "$RUN/sensors-beat" 2>/dev/null)
-	limit=10
-	case "$SENSOR_INTERVAL" in
-		*[!0-9]*) ;;
-		*) [ "$SENSOR_INTERVAL" -gt 2 ] && limit=$((SENSOR_INTERVAL * 5)) ;;
-	esac
-	[ $(( $(uptime_s) - ${beat:-0} )) -gt "$limit" ]
-}
 
-cleanup() {
-	[ -n "$MCU_READER" ] && kill "$MCU_READER" 2>/dev/null
-	[ -n "$HANDLER" ] && kill "$HANDLER" 2>/dev/null
-	if [ -n "$SENSORS" ] && kill "$SENSORS" 2>/dev/null; then
-		# It switches the sensor buffers off on the way out, unless stuck
-		i=0
-		while kill -0 "$SENSORS" 2>/dev/null && [ $i -lt 15 ]; do sleep 0.2; i=$((i + 1)); done
-		if kill -0 "$SENSORS" 2>/dev/null; then
-			kill_tree "$SENSORS"
-			smgr_stream off
-		fi
-	fi
-	if [ -n "$SUB" ] && kill "$SUB" 2>/dev/null; then
-		i=0
-		while kill -0 "$SUB" 2>/dev/null && [ $i -lt 10 ]; do sleep 0.2; i=$((i + 1)); done
-		kill -9 "$SUB" 2>/dev/null
-	fi
-	MCU_READER=""; HANDLER=""; SUB=""; SENSORS=""
-	rm -f "$RUN/mcu-reader.pid" "$RUN/mcu-online"
-}
+# MQTT ------------------------------------------------------------------------
 
-session() {
-	mkdir -p "$RUN"
-	rm -f "$RUN/cmd"
-	mkfifo "$RUN/cmd"
-	# The subscriber holds the connection that carries the last will. Its
-	# client id is per process: a second connection with the same id would
-	# take the session over and fire the will.
-	sub_exec -q 1 -k 30 -i "${NODE_ID}-$$" -v \
-		--will-topic "$BASE/status" --will-payload offline --will-retain --will-qos 1 \
-		-t "$BASE/cmd/#" > "$RUN/cmd" &
-	SUB=$!
-	"$0" --handler < "$RUN/cmd" &
-	HANDLER=$!
-	nap 2
-	kill -0 "$SUB" 2>/dev/null || return 1
-	publish_discovery || return 1
-	pub -r -t "$BASE/status" -m online
-	pub -r -t "$BASE/mcu/status" -m offline
-	log "connected to $MQTT_HOST:$MQTT_PORT as $NODE_ID"
-	sensors_start
-	while kill -0 "$SUB" 2>/dev/null; do
-		pub -r -t "$BASE/state" -m "$(linux_state)" || break
-		# The sensor stream ends with its MQTT connection or gets stuck:
-		# start it again
-		if [ -n "$SENSORS" ] && sensors_stalled; then
-			log "restarting the sensor stream"
-			kill_tree "$SENSORS"
-			smgr_stream off
-			sensors_start
-		fi
-		if [ -n "$MCU_READER" ] && kill -0 "$MCU_READER" 2>/dev/null && [ -e "$MCU_PORT" ]; then
-			# Without a bridge, commands would land in a bare REPL
-			[ -e "$RUN/mcu-online" ] && mcu_send get
-		else
-			[ -n "$MCU_READER" ] && kill "$MCU_READER" 2>/dev/null
-			MCU_READER=""
-			mcu_start
-		fi
-		nap "$INTERVAL"
-	done
-	return 1
-}
+def on_connect(client, userdata, flags, reason, properties):
+    client.subscribe(f"{BASE}/cmd/#")
+    discovery()
+    publish(f"{BASE}/status", "online")
 
-case "$1" in
-	--mcu-reader)
-		MCU_PORT=$2
-		mcu_reader
-		exit 0
-		;;
-	--handler)
-		handle_commands
-		exit 0
-		;;
-	--sensors)
-		mkdir -p "$RUN"
-		sensors_main
-		exit 0
-		;;
-esac
 
-trap 'cleanup; [ -n "$MQTT_HOST" ] && pub -r -t "$BASE/status" -m offline; exit 0' INT TERM
+def on_message(client, userdata, msg):
+    cmd, payload = msg.topic.rsplit("/", 1)[1], msg.payload.decode()
+    if cmd == "reboot":
+        publish(f"{BASE}/status", "offline")
+        os.system("reboot")
+    elif cmd == "led" and (payload in ("on", "off") or payload.startswith("rgb ")):
+        words = payload.split()
+        if payload in ("on", "off"):
+            mcu_send("led " + payload)
+        elif len(words) == 4 and all(w.isdigit() for w in words[1:]):
+            mcu_send(payload)
+    elif cmd in ("press_vol_up", "press_vol_down", "press_camera"):
+        mcu_send(f"press {cmd.removeprefix('press_')} 300")
 
-if [ -z "$MQTT_HOST" ]; then
-	log "MQTT_HOST is not set in $CONF, idle"
-	while :; do nap 3600; done
-fi
 
-client_options
+def stop(*_):
+    sensors_off()
+    client.publish(f"{BASE}/status", "offline", qos=1, retain=True).wait_for_publish(2)
+    client.disconnect()
+    os._exit(0)
 
-while :; do
-	session
-	cleanup
-	log "connection to $MQTT_HOST:$MQTT_PORT lost, retrying in 10 s"
-	nap 10
-done
+
+if __name__ == "__main__":
+    if not conf["MQTT_HOST"]:
+        print(f"limeboard-ha: MQTT_HOST is not set in {CONF}, idle", flush=True)
+        signal.pause()
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    if conf["MQTT_USER"]:
+        client.username_pw_set(conf["MQTT_USER"], conf["MQTT_PASSWORD"])
+    client.will_set(f"{BASE}/status", "offline", qos=1, retain=True)
+    client.on_connect, client.on_message = on_connect, on_message
+    client.connect_async(conf["MQTT_HOST"], int(conf["MQTT_PORT"]))
+    client.loop_start()  # reconnects by itself
+    print(f"limeboard-ha: {NODE} -> {conf['MQTT_HOST']}:{conf['MQTT_PORT']}", flush=True)
+    threading.Thread(target=mcu_loop, daemon=True).start()
+    if SENSORS:
+        threading.Thread(target=sensor_loop, daemon=True).start()
+    while True:
+        publish(f"{BASE}/state", system_state())
+        time.sleep(int(conf["INTERVAL"]))

@@ -1,10 +1,16 @@
 config BR2_PACKAGE_LIMEBOARD_HA
 	bool "limeboard-ha"
-	select BR2_PACKAGE_MOSQUITTO
-	select BR2_PACKAGE_LIMEBOARD_MCU
+	depends on BR2_PACKAGE_PYTHON3
+	select BR2_PACKAGE_PYTHON_PAHO_MQTT
+	select BR2_PACKAGE_PYTHON_SERIAL
+	select BR2_PACKAGE_DFU_UTIL
 	help
-	  Makes the Limeboard a Home Assistant device: publishes MQTT
-	  discovery for the phone's sensors and, through the STM32
-	  bridge, for the STM32's button, LED, header pins and the
-	  phone's keys. Configured in /etc/limeboard-ha.conf; idle
-	  until a broker is set there.
+	  Makes the Limeboard a Home Assistant device through MQTT
+	  discovery: the phone's system state and sensors and, with the
+	  bridge (/usr/share/limeboard-ha/code.py) on the STM32's
+	  CIRCUITPY drive, its RGB LED, button and the phone's keys.
+	  Configured in /etc/limeboard-ha.conf. dfu-util is there to
+	  back up or reflash the STM32.
+
+comment "limeboard-ha needs python3"
+	depends on !BR2_PACKAGE_PYTHON3
