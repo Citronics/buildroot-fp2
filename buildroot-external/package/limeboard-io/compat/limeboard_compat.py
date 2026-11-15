@@ -39,24 +39,38 @@ def gpio_chip():
     return None
 
 
-def i2c_bus():
-    """Return N of the Limeboard's /dev/i2c-N, or None."""
+def i2c_bus(port=0):
+    """Return N of /dev/i2c-N for the Limeboard's I2C port, or None.
+
+    Port 0 is SDA GPIO2/SCL GPIO3, port 1 SDA GPIO0/SCL GPIO1.
+    """
     for name in _entries("/sys/bus/i2c/devices", "i2c-"):
         try:
             with open(f"/sys/bus/i2c/devices/{name}/name") as f:
-                if f.read().startswith("dln2-i2c"):
-                    return int(name[len("i2c-"):])
-        except (OSError, ValueError):
-            pass
+                adapter = f.read().strip()
+        except OSError:
+            continue
+        # "dln2-i2c-<usb device>-<port>"
+        if adapter.startswith("dln2-i2c") and adapter.endswith(f"-{port}"):
+            return int(name[len("i2c-"):])
     return None
 
 
-def spi_bus():
-    """Return B of the Limeboard's /dev/spidevB.C, or None."""
+def spi_bus(port=0):
+    """Return B of /dev/spidevB.C for the Limeboard's SPI port, or None.
+
+    Port 0 is GPIO9-11 (CE0 GPIO8, CE1 GPIO7), port 1 GPIO19-21 (CE0 GPIO18,
+    CE1 GPIO17, CE2 GPIO16).
+    """
+    buses = []
     for name in _entries("/sys/class/spi_master", "spi"):
-        if "/dln2-spi." in os.path.realpath("/sys/class/spi_master/" + name):
-            return int(name[len("spi"):])
-    return None
+        path = os.path.realpath("/sys/class/spi_master/" + name)
+        cell = [part for part in path.split("/") if part.startswith("dln2-spi.")]
+        if cell:
+            # The ports' devices are numbered in port order: dln2-spi.<id>.auto
+            buses.append((int(cell[0].split(".")[1]), int(name[len("spi"):])))
+    buses.sort()
+    return buses[port][1] if port < len(buses) else None
 
 
 class _AliasLoader:

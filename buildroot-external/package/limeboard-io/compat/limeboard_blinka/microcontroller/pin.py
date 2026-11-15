@@ -35,10 +35,17 @@ TXD, RXD = D14, D15
 # Onboard: one RGB LED (a line per colour channel) and the user button
 LED_R, LED_G, LED_B, BUTTON = Pin(28), Pin(29), Pin(30), Pin(31)
 
-_i2c = i2c_bus()
-i2cPorts = ((_i2c, SCL, SDA),) if _i2c is not None else ()
-# /dev/spidevB.0 and B.1, created by the kernel's spi-dln2 driver
-_spi = spi_bus()
-spiPorts = ((_spi, SCLK, MOSI, MISO),) if _spi is not None else ()
+# The second buses, in the Raspberry Pi's i2c0 and spi1 positions
+SDA0, SCL0 = D0, D1
+ID_SD, ID_SC = D0, D1
+SCLK_1, MOSI_1, MISO_1 = D21, D20, D19
+CE0_1, CE1_1, CE2_1 = D18, D17, D16
+
+i2cPorts = tuple((bus, scl, sda) for bus, scl, sda in
+                 ((i2c_bus(0), SCL, SDA), (i2c_bus(1), SCL0, SDA0)) if bus is not None)
+# /dev/spidevB.C, created by the kernel's spi-dln2 driver
+spiPorts = tuple((bus, sclk, mosi, miso) for bus, sclk, mosi, miso in
+                 ((spi_bus(0), SCLK, MOSI, MISO), (spi_bus(1), SCLK_1, MOSI_1, MISO_1))
+                 if bus is not None)
 # The UART is a USB serial port (/dev/ttyACM*): open it with pyserial
 uartPorts = ()

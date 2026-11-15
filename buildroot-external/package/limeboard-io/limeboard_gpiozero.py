@@ -24,6 +24,7 @@ from threading import Lock
 
 import lgpio
 from gpiozero.pins import BoardInfo, HeaderInfo
+from gpiozero.pins import data as _data
 from gpiozero.pins.data import GND, V3_3, V5
 from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
 from gpiozero.pins.local import LocalPiFactory
@@ -31,14 +32,26 @@ from gpiozero.pins.pi import PiBoardInfo
 
 CHIP_LABEL = "dln2"
 
+# gpiozero's hardware SPI knows only the Pi's spi0. The Limeboard also has
+# spi1, as /dev/spidev1.x: register its pins so SPI devices can use port=1.
+_data.SPI_HARDWARE_PINS.setdefault(1, {
+    "clock": "GPIO21",
+    "mosi": "GPIO20",
+    "miso": "GPIO19",
+    "select": ("GPIO18", "GPIO17", "GPIO16"),
+})
+
 # Pin functions in gpiozero's header data format: {interface: name}
 def gpiof(gpio, interface=None, name=None):
     return {"gpio": gpio, interface: name} if interface else {"gpio": gpio}
 
 
 # The 40-pin header: the Raspberry Pi layout, with the functions the
-# Limeboard I/O firmware provides (no PWM, PCM, GPCLK or second SPI bus).
+# Limeboard I/O firmware provides: i2c0, i2c1, spi0, spi1 and one UART, in
+# the Pi's positions (no PWM, PCM or GPCLK).
 _G = {n: gpiof(f"GPIO{n}") for n in range(28)}
+_G[0] = gpiof("GPIO0", "i2c", "I2C0 SDA")
+_G[1] = gpiof("GPIO1", "i2c", "I2C0 SCL")
 _G[2] = gpiof("GPIO2", "i2c", "I2C1 SDA")
 _G[3] = gpiof("GPIO3", "i2c", "I2C1 SCL")
 _G[7] = gpiof("GPIO7", "spi", "SPI0 CE1")
@@ -48,6 +61,12 @@ _G[10] = gpiof("GPIO10", "spi", "SPI0 MOSI")
 _G[11] = gpiof("GPIO11", "spi", "SPI0 SCLK")
 _G[14] = gpiof("GPIO14", "uart", "UART0 TXD")
 _G[15] = gpiof("GPIO15", "uart", "UART0 RXD")
+_G[16] = gpiof("GPIO16", "spi", "SPI1 CE2")
+_G[17] = gpiof("GPIO17", "spi", "SPI1 CE1")
+_G[18] = gpiof("GPIO18", "spi", "SPI1 CE0")
+_G[19] = gpiof("GPIO19", "spi", "SPI1 MISO")
+_G[20] = gpiof("GPIO20", "spi", "SPI1 MOSI")
+_G[21] = gpiof("GPIO21", "spi", "SPI1 SCLK")
 
 J8 = (20, 2, {
     1: V3_3, 2: V5,

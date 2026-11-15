@@ -16,6 +16,12 @@ CE0_1 = CE0
 TXD, RXD = pin.TXD, pin.RXD
 TX, RX = TXD, RXD
 
+# The second I2C bus (GPIO0/1) and SPI bus (GPIO19-21, chip selects 18/17/16)
+SDA0, SCL0, ID_SD, ID_SC = pin.SDA0, pin.SCL0, pin.ID_SD, pin.ID_SC
+SCLK_1 = SCK_1 = pin.SCLK_1
+MOSI_1, MISO_1 = pin.MOSI_1, pin.MISO_1
+CE0_1, CE1_1, CE2_1 = pin.CE0_1, pin.CE1_1, pin.CE2_1
+
 LED_R, LED_G, LED_B, BUTTON = pin.LED_R, pin.LED_G, pin.LED_B, pin.BUTTON
 
 _i2c = None
