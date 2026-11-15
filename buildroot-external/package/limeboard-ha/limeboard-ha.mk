@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-LIMEBOARD_HA_DEPENDENCIES = python3 python-paho-mqtt limeboard-io
+LIMEBOARD_HA_DEPENDENCIES = python3 python-paho-mqtt python-psutil limeboard-io
 
 define LIMEBOARD_HA_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(LIMEBOARD_HA_PKGDIR)/limeboard-ha $(TARGET_DIR)/usr/bin/limeboard-ha
