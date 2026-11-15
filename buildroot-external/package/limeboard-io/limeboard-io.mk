@@ -9,9 +9,21 @@ LIMEBOARD_IO_DEPENDENCIES = dfu-util
 define LIMEBOARD_IO_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/90-limeboard-io.rules \
 		$(TARGET_DIR)/usr/lib/udev/rules.d/90-limeboard-io.rules
-	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-spi.conf \
-		$(TARGET_DIR)/etc/modprobe.d/limeboard-spi.conf
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/config.txt \
+		$(TARGET_DIR)/etc/limeboard/config.txt
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard.conf \
+		$(TARGET_DIR)/etc/modprobe.d/limeboard.conf
 endef
+
+ifeq ($(BR2_PACKAGE_PYTHON3),y)
+LIMEBOARD_IO_DEPENDENCIES += python3
+
+define LIMEBOARD_IO_INSTALL_CONFIG_TOOL
+	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/limeboard-config \
+		$(TARGET_DIR)/usr/bin/limeboard-config
+endef
+LIMEBOARD_IO_POST_INSTALL_TARGET_HOOKS += LIMEBOARD_IO_INSTALL_CONFIG_TOOL
+endif
 
 ifeq ($(BR2_PACKAGE_LIMEBOARD_IO_GPIOZERO),y)
 LIMEBOARD_IO_DEPENDENCIES += python3 python-gpiozero python-lgpio

@@ -1,0 +1,22 @@
+# Limeboard header buses, as in a Raspberry Pi's config.txt. Every bus is off
+# until a line here turns it on. After a change, run: sudo limeboard-config
+# (or "sudo limeboard-config enable i2c1", which edits this file for you).
+
+# i2c1: SDA GPIO2 (pin 3), SCL GPIO3 (pin 5), the usual I2C bus
+#dtparam=i2c_arm=on
+
+# i2c0: SDA GPIO0 (pin 27), SCL GPIO1 (pin 28)
+#dtoverlay=i2c0
+
+# spi0: MOSI GPIO10, MISO GPIO9, SCLK GPIO11; /dev/spidev0.0 (CE0 GPIO8)
+# and /dev/spidev0.1 (CE1 GPIO7). spi0-1cs: CE0 only.
+#dtparam=spi=on
+
+# spi1: MOSI GPIO20, MISO GPIO19, SCLK GPIO21; /dev/spidev1.0 (CE0 GPIO18),
+# 1.1 (CE1 GPIO17), 1.2 (CE2 GPIO16): spi1-1cs, spi1-2cs or spi1-3cs.
+#dtoverlay=spi1-1cs
+
+# A kernel driver on a chip select instead of spidev, with its interrupt on a
+# header GPIO (BCM number), its maximum clock and SPI mode if needed:
+#spi0_cs1=mcp3008
+#spi1_cs0=mcp2515,irq=25,speed=10000000

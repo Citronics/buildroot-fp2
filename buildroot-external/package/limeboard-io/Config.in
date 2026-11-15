@@ -7,9 +7,11 @@ config BR2_PACKAGE_LIMEBOARD_IO
 	  Raspberry Pi style header as standard Linux devices through
 	  the kernel's dln2 drivers (GPIO chip "dln2", I2C, SPI, ADC)
 	  and a USB serial port for the header UART. Installs the udev
-	  rule that binds dln2 to the firmware's USB ID, the SPI chip
-	  select settings (/etc/modprobe.d/limeboard-spi.conf), and
-	  dfu-util to update the firmware.
+	  rule that binds dln2 to the firmware's USB ID, dfu-util to
+	  update the firmware, and /etc/limeboard/config.txt: the I2C
+	  and SPI buses are off until it turns them on, with Raspberry
+	  Pi config.txt lines (dtparam=i2c_arm=on, dtparam=spi=on...),
+	  applied by limeboard-config (installed with python3).
 
 	  Needs CONFIG_MFD_DLN2, GPIO_DLN2, I2C_DLN2, SPI_DLN2 and
 	  DLN2_ADC in the kernel.
