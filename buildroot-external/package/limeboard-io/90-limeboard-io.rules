@@ -4,3 +4,8 @@
 ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTR{bInterfaceNumber}=="00", \
 	ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", \
 	RUN+="/sbin/modprobe dln2", RUN+="/bin/sh -c 'echo 1209 0001 > /sys/bus/usb/drivers/dln2/new_id'"
+
+# The header's UART (TXD GPIO14, RXD GPIO15) as /dev/serial0, its name on a
+# Raspberry Pi
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", \
+	ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="serial0"
