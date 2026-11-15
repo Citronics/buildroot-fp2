@@ -21,7 +21,12 @@ lines a Raspberry Pi's config.txt uses:
 for a kernel driver on a chip select instead of spidev:
 
     spi0_cs1=mcp3008
-    spi1_cs0=mcp2515,irq=25,speed=10000000
+    spi1_cs0=mcp2515,irq=25,clock=16000000
+
+the Pi's CAN controller overlays, which do the same:
+
+    dtoverlay=mcp251xfd,spi0-0,interrupt=25      (oscillator=40000000)
+    dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25
 
 and for a login console on the header UART (/dev/serial0, pins 8 and 10):
 
@@ -61,6 +66,14 @@ ENABLE_LINE = {
 DTPARAMS = {"i2c_arm": "i2c1", "i2c": "i2c1", "i2c1": "i2c1", "i2c_vc": "i2c0",
             "i2c0": "i2c0", "spi": "spi0"}
 CS_DEVICE = re.compile(r"^(spi[01])_cs([0-3])$")
+# Raspberry Pi overlays for SPI CAN controllers: device, default
+# chip select, interrupt GPIO and oscillator, as in the Pi's overlays
+CAN_OVERLAYS = {
+    "mcp251xfd": ("mcp251xfd", ("spi0", 0), 25, 40000000),
+    "mcp2515": ("mcp2515", ("spi0", 0), 25, 16000000),
+    "mcp2515-can0": ("mcp2515", ("spi0", 0), 25, 16000000),
+    "mcp2515-can1": ("mcp2515", ("spi0", 1), 25, 16000000),
+}
 ON = ("on", "true", "yes", "1", "")
 
 
@@ -102,7 +115,13 @@ def parse(lines, path=CONFIG, warn=warn):
         elif key == "dtoverlay":
             overlay = value.split(",")[0].split(":")[0]
             match = re.fullmatch(r"(spi[01])-([123])cs", overlay)
-            if overlay == "i2c0":
+            if overlay in CAN_OVERLAYS:
+                chip, problem = can_overlay(overlay, value)
+                if problem:
+                    warn(f"{path}:{number}: {problem}, ignored")
+                else:
+                    config["spi"][chip[0]] = chip[1]
+            elif overlay == "i2c0":
                 config["i2c"].add("i2c0")
             elif match and int(match[2]) <= SPI_CHIP_SELECTS[match[1]]:
                 _enable(match[1], config, int(match[2]))
@@ -121,6 +140,35 @@ def parse(lines, path=CONFIG, warn=warn):
         else:
             warn(f"{path}:{number}: unknown setting {key!r}, ignored")
     return config
+
+
+def can_overlay(overlay, value):
+    """A CAN controller overlay line -> ((bus, cs), chip select setting).
+
+    dtoverlay=mcp251xfd,spi1-0,interrupt=24,oscillator=40000000 gives
+    ("spi1", 0), "mcp251xfd,irq=24,clock=40000000".
+    """
+    device, (bus, cs), irq, clock = CAN_OVERLAYS[overlay]
+    speed = None
+    for param in value.replace(":", ",").split(",")[1:]:
+        name, _, setting = param.strip().partition("=")
+        where = re.fullmatch(r"(spi[01])-([0-3])", name)
+        if where:
+            bus, cs = where[1], int(where[2])
+        elif name == "interrupt" and setting.isdigit():
+            irq = int(setting)
+        elif name == "oscillator" and setting.isdigit():
+            clock = int(setting)
+        elif name in ("speed", "spimaxfrequency") and setting.isdigit():
+            speed = int(setting)
+        elif name:
+            return None, f"{overlay}: parameter {name!r} not supported"
+    if cs >= SPI_CHIP_SELECTS[bus]:
+        return None, f"{bus} has no chip select {cs}"
+    if not 0 <= irq <= 27:
+        return None, f"interrupt GPIO{irq} is not on the header"
+    setting = f"{device},irq={irq},clock={clock}" + (f",speed={speed}" if speed else "")
+    return ((bus, cs), setting), None
 
 
 def _enable(bus, config, chip_selects=None):
