@@ -33,7 +33,7 @@ BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
 BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="$(BR2_EXTERNAL_CITRONICS_PATH)/board/fairphone2/linux-612.config"
 # BV-A variant: same tree, same config, DVFS drivers gated off via fragment
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
-BR2_LINUX_KERNEL_INTREE_DTS_NAME="qcom/qcom-msm8974pro-fairphone-fp2"
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="qcom/qcom-msm8974pro-fairphone-fp2 qcom/qcom-msm8974pro-fairphone-fp2-rig"
 BR2_LINUX_KERNEL_DTB_OVERLAY_SUPPORT=y
 BR2_LINUX_KERNEL_INSTALL_TARGET=y
 BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
