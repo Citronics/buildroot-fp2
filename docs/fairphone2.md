@@ -61,7 +61,7 @@ With the [Limeboard I/O firmware](https://github.com/Citronics/limeboard-firmwar
 
 Use them with the usual tools: `/sys/class/gpio` or libgpiod, `i2cdetect -y -r <bus>`, `i2cget`, the IIO files under `/sys/bus/iio/devices/`. A pin is plain GPIO until a function uses it. The `limeboard-io` package binds the driver to the firmware's USB ID (udev rule) and installs `dfu-util`.
 
-Raspberry Pi gpiozero code runs unchanged with `GPIOZERO_PIN_FACTORY=limeboard`: the `limeboard` pin factory is gpiozero's lgpio factory on the `dln2` chip, and names the onboard LED and button `LED_R`, `LED_G`, `LED_B` and `BUTTON`. Use `LED` and `RGBLED(..., pwm=False)`: the firmware has no PWM.
+Raspberry Pi gpiozero code runs unchanged with `GPIOZERO_PIN_FACTORY=limeboard`: the `limeboard` pin factory is gpiozero's lgpio factory on the `dln2` chip, and names the onboard LED and button `LED_R`, `LED_G`, `LED_B` and `BUTTON`. Use `LED` and `RGBLED(..., pwm=False)`: the firmware has no PWM. RPi.GPIO (rpi-lgpio) and Adafruit Blinka work as well: at Python startup, `limeboard_compat` selects the `limeboard` factory, points RPi.GPIO at the `dln2` chip and gives Blinka the Limeboard's `board` module (Blinka itself is installed with pip). `LIMEBOARD_COMPAT=0` turns it off.
 
 To update the firmware: `dfu-util -e` reboots the STM32 into its ROM bootloader (also reached by holding the user button at power-on), then `dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D limeboard-io.bin`. Back up the whole flash first with `dfu-util -d 0483:df11 -a 0 -s 0x08000000:524288:leave -U backup.bin`.
 

@@ -27,4 +27,20 @@ endef
 LIMEBOARD_IO_POST_INSTALL_TARGET_HOOKS += LIMEBOARD_IO_INSTALL_GPIOZERO
 endif
 
+ifeq ($(BR2_PACKAGE_LIMEBOARD_IO_PI_COMPAT),y)
+LIMEBOARD_IO_DEPENDENCIES += python-rpi-lgpio
+
+define LIMEBOARD_IO_INSTALL_PI_COMPAT
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/compat/limeboard_compat.py \
+		$(LIMEBOARD_IO_SITE_PACKAGES)/limeboard_compat.py
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/compat/limeboard_compat.pth \
+		$(LIMEBOARD_IO_SITE_PACKAGES)/limeboard_compat.pth
+	for f in __init__.py board.py microcontroller/__init__.py microcontroller/pin.py; do \
+		$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/compat/limeboard_blinka/$$f \
+			$(LIMEBOARD_IO_SITE_PACKAGES)/limeboard_blinka/$$f || exit 1; \
+	done
+endef
+LIMEBOARD_IO_POST_INSTALL_TARGET_HOOKS += LIMEBOARD_IO_INSTALL_PI_COMPAT
+endif
+
 $(eval $(generic-package))
