@@ -71,11 +71,13 @@ def entity(component, obj, name, topic=None, value=None, io_entity=False, **extr
 
 def discovery():
     m = {"state_class": "measurement"}
-    entity("sensor", "cpu_temp", "CPU temperature", "state", "value_json.cpu_temp", device_class="temperature", unit_of_measurement="°C", **m)
-    entity("sensor", "cpu_freq", "CPU frequency", "state", "value_json.cpu_freq", device_class="frequency", unit_of_measurement="MHz", **m)
-    entity("sensor", "load", "Load", "state", "value_json.load", icon="mdi:chip", **m)
-    entity("sensor", "mem_used", "Memory used", "state", "value_json.mem_used", unit_of_measurement="%", icon="mdi:memory", **m)
-    entity("sensor", "supply_voltage", "Supply voltage", "state", "value_json.supply_voltage", device_class="voltage", unit_of_measurement="V", **m)
+    entity("sensor", "cpu_temp", "CPU temperature", "state", "value_json.cpu_temp", device_class="temperature", unit_of_measurement="°C", entity_category="diagnostic", **m)
+    entity("sensor", "cpu_freq", "CPU frequency", "state", "value_json.cpu_freq", device_class="frequency", unit_of_measurement="MHz", entity_category="diagnostic", **m)
+    entity("sensor", "load", "Load", "state", "value_json.load", icon="mdi:chip", entity_category="diagnostic", **m)
+    entity("sensor", "supply_voltage", "Supply voltage", "state", "value_json.supply_voltage", device_class="voltage", unit_of_measurement="V", entity_category="diagnostic", **m)
+    entity("sensor", "mem_used", "RAM usage", "state", "value_json.mem_used", unit_of_measurement="%", icon="mdi:memory", entity_category="diagnostic", **m)
+    entity("sensor", "disk_free", "Disk space left", "state", "value_json.disk_free", device_class="data_size", unit_of_measurement="GB",
+           suggested_display_precision=2, entity_category="diagnostic", **m)
     entity("sensor", "uptime", "Uptime", "state", "value_json.uptime", device_class="duration", unit_of_measurement="s", entity_category="diagnostic")
     entity("sensor", "ip", "IP address", "state", "value_json.ip", entity_category="diagnostic", icon="mdi:ip-network")
     entity("button", "reboot", "Reboot", command_topic=f"{BASE}/cmd/reboot", device_class="restart", entity_category="config")
@@ -83,9 +85,9 @@ def discovery():
         if "accel" in SENSORS:
             entity("sensor", f"accel_{axis}", f"Acceleration {axis}", "sensors", f"value_json.accel_{axis}", unit_of_measurement="m/s²", icon="mdi:axis-arrow", **m)
         if "gyro" in SENSORS:
-            entity("sensor", f"gyro_{axis}", f"Rotation {axis}", "sensors", f"value_json.gyro_{axis}", unit_of_measurement="rad/s", entity_category="diagnostic", **m)
+            entity("sensor", f"gyro_{axis}", f"Rotation {axis}", "sensors", f"value_json.gyro_{axis}", unit_of_measurement="rad/s", icon="mdi:rotate-3d-variant", **m)
         if "mag" in SENSORS:
-            entity("sensor", f"mag_{axis}", f"Magnetic field {axis}", "sensors", f"value_json.mag_{axis}", unit_of_measurement="G", entity_category="diagnostic", icon="mdi:magnet", **m)
+            entity("sensor", f"mag_{axis}", f"Magnetic field {axis}", "sensors", f"value_json.mag_{axis}", unit_of_measurement="G", icon="mdi:magnet", **m)
     if "accel" in SENSORS:
         entity("sensor", "tilt", "Tilt", "sensors", "(atan2(sqrt(value_json.accel_x ** 2 + value_json.accel_y ** 2), value_json.accel_z) * 180 / pi) | round(1)",
                unit_of_measurement="°", icon="mdi:angle-acute", **m)
@@ -120,10 +122,12 @@ def system_state():
         except OSError:
             ip = None
     freq = read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+    disk = os.statvfs("/")
     return {"cpu_temp": max(temps) / 1000 if temps else None,
             "cpu_freq": int(freq) // 1000 if freq else None,
             "load": float(read("/proc/loadavg").split()[0]),
             "mem_used": round((total - avail) * 100 / total, 1),
+            "disk_free": round(disk.f_bavail * disk.f_frsize / 1e9, 2),
             "supply_voltage": round(int(volts) / 1e6, 3) if volts else None,
             "uptime": int(float(read("/proc/uptime").split()[0])), "ip": ip}
 
