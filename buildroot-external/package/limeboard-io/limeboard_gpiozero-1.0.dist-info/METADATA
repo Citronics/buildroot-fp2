@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: limeboard-gpiozero
+Version: 1.0
+Summary: gpiozero pin factory for the Limeboard header

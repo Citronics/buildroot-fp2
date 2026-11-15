@@ -1,0 +1,2 @@
+[gpiozero_pin_factories]
+limeboard = limeboard_gpiozero:LimeboardFactory

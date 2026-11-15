@@ -13,5 +13,25 @@ config BR2_PACKAGE_LIMEBOARD_IO
 	  Needs CONFIG_MFD_DLN2, GPIO_DLN2, I2C_DLN2, SPI_DLN2 and
 	  DLN2_ADC in the kernel.
 
+if BR2_PACKAGE_LIMEBOARD_IO
+
+config BR2_PACKAGE_LIMEBOARD_IO_GPIOZERO
+	bool "gpiozero pin factory"
+	depends on BR2_PACKAGE_PYTHON3
+	depends on BR2_arm # python-gpiozero
+	select BR2_PACKAGE_PYTHON_GPIOZERO
+	select BR2_PACKAGE_PYTHON_LGPIO
+	help
+	  The "limeboard" pin factory for gpiozero: Raspberry Pi
+	  gpiozero code runs on the header with
+	  GPIOZERO_PIN_FACTORY=limeboard. It is gpiozero's lgpio
+	  factory on the "dln2" GPIO chip.
+
+comment "gpiozero pin factory needs python3"
+	depends on !BR2_PACKAGE_PYTHON3
+	depends on BR2_arm
+
+endif
+
 comment "limeboard-io needs udev"
 	depends on !BR2_PACKAGE_HAS_UDEV
