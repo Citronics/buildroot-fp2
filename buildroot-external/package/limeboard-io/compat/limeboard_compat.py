@@ -34,7 +34,7 @@ def _entries(directory, prefix):
 def gpio_chip():
     """Return N of the Limeboard's /dev/gpiochipN, or None."""
     for name in _entries("/sys/bus/gpio/devices", "gpiochip"):
-        if "/dln2-gpio." in os.path.realpath("/sys/bus/gpio/devices/" + name):
+        if "/citronics-dln2-gpio." in os.path.realpath("/sys/bus/gpio/devices/" + name):
             return int(name[len("gpiochip"):])
     return None
 
@@ -50,8 +50,8 @@ def i2c_bus(port=0):
                 adapter = f.read().strip()
         except OSError:
             continue
-        # "dln2-i2c-<usb device>-<port>"
-        if adapter.startswith("dln2-i2c") and adapter.endswith(f"-{port}"):
+        # "citronics-dln2-i2c-<usb device>-<port>"
+        if adapter.startswith("citronics-dln2-i2c") and adapter.endswith(f"-{port}"):
             return int(name[len("i2c-"):])
     return None
 
@@ -65,9 +65,9 @@ def spi_bus(port=0):
     buses = []
     for name in _entries("/sys/class/spi_master", "spi"):
         path = os.path.realpath("/sys/class/spi_master/" + name)
-        cell = [part for part in path.split("/") if part.startswith("dln2-spi.")]
+        cell = [part for part in path.split("/") if part.startswith("citronics-dln2-spi.")]
         if cell:
-            # The ports' devices are numbered in port order: dln2-spi.<id>.auto
+            # The ports' devices are numbered in port order: citronics-dln2-spi.<id>.auto
             buses.append((int(cell[0].split(".")[1]), int(name[len("spi"):])))
     buses.sort()
     return buses[port][1] if port < len(buses) else None

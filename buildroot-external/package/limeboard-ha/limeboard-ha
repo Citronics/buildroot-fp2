@@ -21,7 +21,7 @@ import lgpio
 import paho.mqtt.client as mqtt
 import psutil
 from gpiozero import Button, RGBLED
-from limeboard_gpiozero import LimeboardFactory
+from limeboard_gpiozero import CHIP_LABEL, LimeboardFactory
 
 CONF = os.environ.get("LIMEBOARD_HA_CONF", "/etc/limeboard-ha.conf")
 
@@ -200,7 +200,7 @@ def publish_io(*_):
 
 def chip_present(factory):
     try:  # fails once the USB device behind the open chip has gone
-        return lgpio.gpio_get_chip_info(factory._handle)[3] == "dln2"
+        return lgpio.gpio_get_chip_info(factory._handle)[3] == CHIP_LABEL
     except lgpio.error:
         return False
 

@@ -17,7 +17,7 @@ if _chip is None:
 # CHIP handle: replace it with the Limeboard's chip before any pin is used.
 _other = lgpio_pin.CHIP
 lgpio_pin.CHIP = lgpio.gpiochip_open(_chip)
-if lgpio.gpio_get_chip_info(lgpio_pin.CHIP)[3] != "dln2":
+if lgpio.gpio_get_chip_info(lgpio_pin.CHIP)[3] != "citronics-dln2":
     raise RuntimeError(f"gpiochip{_chip} is not the Limeboard's GPIO chip")
 if _other is not None and _other >= 0:
     lgpio.gpiochip_close(_other)
@@ -43,7 +43,7 @@ CE0_1, CE1_1, CE2_1 = D18, D17, D16
 
 i2cPorts = tuple((bus, scl, sda) for bus, scl, sda in
                  ((i2c_bus(0), SCL, SDA), (i2c_bus(1), SCL0, SDA0)) if bus is not None)
-# /dev/spidevB.C, created by the kernel's spi-dln2 driver
+# /dev/spidevB.C, created by the citronics-dln2 driver
 spiPorts = tuple((bus, sclk, mosi, miso) for bus, sclk, mosi, miso in
                  ((spi_bus(0), SCLK, MOSI, MISO), (spi_bus(1), SCLK_1, MOSI_1, MISO_1))
                  if bus is not None)

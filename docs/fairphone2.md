@@ -49,21 +49,21 @@ It requires udevd to be launched for the remoteproc to be detected. It also requ
 
 ## Limeboard header (GPIO, I2C, SPI, ADC, UART)
 
-With the [Limeboard I/O firmware](https://github.com/Citronics/limeboard-firmware) on its STM32, the Limeboard's Raspberry Pi style header shows up as standard Linux devices through the kernel's `dln2` drivers, with the Pi's BCM numbering:
+With the [Limeboard I/O firmware](https://github.com/Citronics/limeboard-firmware) on its STM32, the Limeboard's Raspberry Pi style header shows up as standard Linux devices through the kernel's `citronics-dln2` driver, with the Pi's BCM numbering:
 
 | Linux device | Header |
 |---|---|
-| GPIO chip `dln2`, lines 0-27 | GPIO0 to GPIO27 (lines 28-31: RGB LED red, green, blue, user button) |
-| I2C bus `dln2-i2c` | SDA GPIO2, SCL GPIO3 |
-| SPI controller | SPI0: MOSI GPIO10, MISO GPIO9, SCLK GPIO11, CE0 GPIO8, CE1 GPIO7 |
-| IIO ADC `dln2-adc` (10-bit, 3.3 V) | GPIO5, 12, 16, 22, 17, 25, 20, 23 |
-| USB serial port `/dev/ttyACM*` | UART TXD GPIO14, RXD GPIO15 |
+| GPIO chip `citronics-dln2`, lines 0-27 | GPIO0 to GPIO27 (lines 28-31: RGB LED red, green, blue, user button) |
+| I2C buses `citronics-dln2-i2c-…-0` and `-1` | i2c1: SDA GPIO2, SCL GPIO3; i2c0: SDA GPIO0, SCL GPIO1 |
+| `/dev/spidev0.*`, `/dev/spidev1.*` | SPI0: MOSI GPIO10, MISO GPIO9, SCLK GPIO11, CE0 GPIO8, CE1 GPIO7; SPI1: MOSI GPIO20, MISO GPIO19, SCLK GPIO21, CE0-2 GPIO18/17/16 |
+| IIO ADC `citronics-dln2-adc` (10-bit, 3.3 V) | GPIO5, 12, 16, 22, 17, 25, 20, 23 |
+| `/dev/serial0`, the USB serial port `/dev/ttyACM*` | UART TXD GPIO14, RXD GPIO15 |
 
-Use them with the usual tools: `/sys/class/gpio` or libgpiod, `i2cdetect -y -r <bus>`, `i2cget`, the IIO files under `/sys/bus/iio/devices/`. A pin is plain GPIO until a function uses it. The `limeboard-io` package binds the driver to the firmware's USB ID (udev rule) and installs `dfu-util`.
+Use them with the usual tools: `/sys/class/gpio` or libgpiod, `i2cdetect -y -r <bus>`, `i2cget`, the IIO files under `/sys/bus/iio/devices/`. A pin is plain GPIO until a function uses it. The driver binds to the firmware's USB ID by itself; the `limeboard-io` package names the UART `/dev/serial0` (udev rule) and installs `dfu-util`.
 
 As on a Raspberry Pi, the I2C and SPI buses are off until `/etc/limeboard/config.txt` turns them on, with the same lines (`dtparam=i2c_arm=on`, `dtparam=spi=on`, `dtoverlay=spi1-3cs`, `dtoverlay=i2c0`); `sudo limeboard-config enable i2c1` adds a line and applies it at once.
 
-Raspberry Pi gpiozero code runs unchanged with `GPIOZERO_PIN_FACTORY=limeboard`: the `limeboard` pin factory is gpiozero's lgpio factory on the `dln2` chip, and names the onboard LED and button `LED_R`, `LED_G`, `LED_B` and `BUTTON`. Use `LED` and `RGBLED(..., pwm=False)`: the firmware has no PWM. RPi.GPIO (rpi-lgpio) and Adafruit Blinka work as well: at Python startup, `limeboard_compat` selects the `limeboard` factory, points RPi.GPIO at the `dln2` chip and gives Blinka the Limeboard's `board` module (Blinka itself is installed with pip). `LIMEBOARD_COMPAT=0` turns it off.
+Raspberry Pi gpiozero code runs unchanged with `GPIOZERO_PIN_FACTORY=limeboard`: the `limeboard` pin factory is gpiozero's lgpio factory on the `citronics-dln2` chip, and names the onboard LED and button `LED_R`, `LED_G`, `LED_B` and `BUTTON`. Use `LED` and `RGBLED(..., pwm=False)`: the firmware has no PWM. RPi.GPIO (rpi-lgpio) and Adafruit Blinka work as well: at Python startup, `limeboard_compat` selects the `limeboard` factory, points RPi.GPIO at the `dln2` chip and gives Blinka the Limeboard's `board` module (Blinka itself is installed with pip). `LIMEBOARD_COMPAT=0` turns it off.
 
 To update the firmware to the version the image carries: `sudo limeboard-config firmware update`. `limeboard-config` is also the Limeboard's `raspi-config`: it turns the buses and a login console on `/dev/serial0` on and off, and a `raspi-config` command answers HAT installers' `raspi-config nonint` calls through it.
 

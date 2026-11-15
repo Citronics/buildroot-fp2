@@ -43,7 +43,7 @@ phone-specific parts are its own code:
 ### The `limeboard` pin factory
 
 The Limeboard I/O firmware turns the header into a Linux GPIO chip labelled
-`dln2`. Its line numbers are the Raspberry Pi's BCM numbers: 0-27 are the
+`citronics-dln2`. Its line numbers are the Raspberry Pi's BCM numbers: 0-27 are the
 header's GPIO0-27, and 28-31 are the onboard LED's red, green and blue
 channels and the user button.
 
@@ -168,7 +168,7 @@ The board appears under Settings > Devices & services > MQTT.
 
 ## Resets of the STM32
 
-The `dln2` chip disappears when the STM32 resets, for example during a
+The `citronics-dln2` chip disappears when the STM32 resets, for example during a
 firmware update or a USB reset, and comes back under a new number:
 - the agent checks the chip 5 times a second;
 - when the chip is gone, it releases the LED and button and reports them
@@ -189,7 +189,7 @@ stop the agent first. The header's GPIO0-27 are free.
 
 - **The LED and button are unavailable.** Check that the firmware is present
   (`lsusb | grep 1209:0001`) and that the driver created its chip
-  (`gpiodetect | grep dln2`). The log says why: `journalctl -u limeboard-ha`
+  (`gpiodetect | grep citronics-dln2`). The log says why: `journalctl -u limeboard-ha`
   on Debian, `/var/log/limeboard-ha.log` on Buildroot.
 - **An entity stays in the wrong section after an update.** Home Assistant
   keeps an existing entity's category when its discovery message changes.

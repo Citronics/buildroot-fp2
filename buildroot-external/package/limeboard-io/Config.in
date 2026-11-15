@@ -6,16 +6,15 @@ config BR2_PACKAGE_LIMEBOARD_IO
 	help
 	  The Limeboard's STM32 with the Limeboard I/O firmware: its
 	  Raspberry Pi style header as standard Linux devices through
-	  the kernel's dln2 drivers (GPIO chip "dln2", I2C, SPI, ADC)
-	  and a USB serial port for the header UART. Installs the udev
-	  rule that binds dln2 to the firmware's USB ID, dfu-util to
-	  update the firmware, and /etc/limeboard/config.txt: the I2C
+	  the kernel's citronics-dln2 driver (GPIO chip
+	  "citronics-dln2", I2C, SPI, ADC) and a USB serial port for the
+	  header UART. Installs the udev rule naming that port
+	  /dev/serial0, dfu-util to update the firmware, and /etc/limeboard/config.txt: the I2C
 	  and SPI buses are off until it turns them on, with Raspberry
 	  Pi config.txt lines (dtparam=i2c_arm=on, dtparam=spi=on...),
 	  applied by limeboard-config (installed with python3).
 
-	  Needs CONFIG_MFD_DLN2, GPIO_DLN2, I2C_DLN2, SPI_DLN2 and
-	  DLN2_ADC in the kernel.
+	  Needs CONFIG_CITRONICS_DLN2 in the kernel.
 
 if BR2_PACKAGE_LIMEBOARD_IO
 
@@ -29,7 +28,7 @@ config BR2_PACKAGE_LIMEBOARD_IO_GPIOZERO
 	  The "limeboard" pin factory for gpiozero: Raspberry Pi
 	  gpiozero code runs on the header with
 	  GPIOZERO_PIN_FACTORY=limeboard. It is gpiozero's lgpio
-	  factory on the "dln2" GPIO chip.
+	  factory on the "citronics-dln2" GPIO chip.
 
 config BR2_PACKAGE_LIMEBOARD_IO_PI_COMPAT
 	bool "Raspberry Pi library compatibility"

@@ -1,7 +1,7 @@
 """gpiozero pin factory for the Limeboard header.
 
 The Limeboard I/O firmware on the board's STM32 makes the header a Linux
-GPIO chip labelled "dln2", with lines numbered like a Raspberry Pi's BCM
+GPIO chip labelled "citronics-dln2", with lines numbered like a Raspberry Pi's BCM
 GPIOs. This factory is gpiozero's own lgpio factory (the default on a
 Raspberry Pi 5) opened on that chip, with a description of the Limeboard's
 header instead of a Pi's. Raspberry Pi gpiozero code then runs unchanged:
@@ -30,7 +30,7 @@ from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
 from gpiozero.pins.local import LocalPiFactory
 from gpiozero.pins.pi import PiBoardInfo
 
-CHIP_LABEL = "dln2"
+CHIP_LABEL = "citronics-dln2"
 
 # gpiozero's hardware SPI knows only the Pi's spi0. The Limeboard also has
 # spi1, as /dev/spidev1.x: register its pins so SPI devices can use port=1.

@@ -1,5 +1,5 @@
 """`microcontroller` for the Limeboard: the STM32 behind the header, reached
-through Linux's dln2 drivers."""
+through the citronics-dln2 driver."""
 import time
 
 from . import pin  # noqa: F401
