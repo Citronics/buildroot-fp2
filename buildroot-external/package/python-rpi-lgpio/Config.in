@@ -1,0 +1,9 @@
+config BR2_PACKAGE_PYTHON_RPI_LGPIO
+	bool "python-rpi-lgpio"
+	select BR2_PACKAGE_PYTHON_LGPIO # runtime
+	help
+	  The RPi.GPIO API on top of lgpio: Raspberry Pi code that
+	  imports RPi.GPIO runs on any Linux GPIO chip, selected with
+	  RPI_LGPIO_CHIP.
+
+	  https://rpi-lgpio.readthedocs.io/
