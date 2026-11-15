@@ -1,0 +1,8 @@
+config BR2_PACKAGE_PYTHON_LGPIO
+	bool "python-lgpio"
+	help
+	  Python module of lg, the Linux GPIO library behind gpiozero's
+	  default pin factory on the Raspberry Pi 5. It drives any
+	  /dev/gpiochip device. Built with the lg C library linked in.
+
+	  https://abyz.me.uk/lg/py_lgpio.html

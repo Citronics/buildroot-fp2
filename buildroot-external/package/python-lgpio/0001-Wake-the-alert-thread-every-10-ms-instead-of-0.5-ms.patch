@@ -1,0 +1,22 @@
+From: Marc Lainez <marc.lainez@gmail.com>
+Date: Sun, 15 Nov 2026 10:30:00 +0100
+Subject: [PATCH] Wake the alert thread every 10 ms instead of 0.5 ms
+
+The alert thread wakes 2000 times a second while any GPIO has edge
+detection, about 16% of a CPU on an MSM8974. Edge events still wake it
+at once; the timeout only paces the pickup of new alerts and the timing
+of debounce and watchdogs, for which 10 ms is enough.
+
+Upstream: not submitted
+---
+--- a/src/lgPthAlerts.c
++++ b/src/lgPthAlerts.c
+@@ -435,7 +435,7 @@
+    struct pollfd pfd[64];
+    lgAlertRec_p pAlertRec[64];
+    struct gpio_v2_line_event eIn[LG_GPIO_MAX_ALERTS_PER_READ];
+-   struct timespec tspec = {0, 5e5}; /* 0.5 ms timeout */
++   struct timespec tspec = {0, 1e7}; /* 10 ms timeout */
+ 
+    while (1)
+    {
