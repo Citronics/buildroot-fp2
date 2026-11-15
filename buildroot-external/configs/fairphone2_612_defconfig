@@ -28,7 +28,7 @@ BR2_LINUX_KERNEL_CUSTOM_REPO_URL="file:///var/home/marc/Projects/linux-msm8x74"
 # snapshots branch refs and silently serves stale trees (LAB-OPERATIONS 7.3).
 # 02d768689518 = 6.18/baseline: v6.18.41 (latest LTS) + 6.18/topic/adsp-sensors
 # + fp2-panel (display) - the release baseline (ledger SES2-A/C).
-BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="69eea3a9f8f7660672912fd7e93a841f8c584296"
+BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="9d15c486fb4493ae8b8fc45a9242df8bb2f390e8"
 BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
 BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="$(BR2_EXTERNAL_CITRONICS_PATH)/board/fairphone2/linux-612.config"
 # BV-A variant: same tree, same config, DVFS drivers gated off via fragment
