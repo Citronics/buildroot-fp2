@@ -1,0 +1,10 @@
+[Unit]
+Description=Login console on the Limeboard header UART (/dev/serial0)
+
+[Service]
+ExecStart=/usr/libexec/limeboard-serial-console
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

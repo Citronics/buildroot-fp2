@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""limeboard-config: turn the Limeboard header's buses on and off, Raspberry Pi
-style.
+"""limeboard-config: set up the Limeboard header, Raspberry Pi style.
 
     limeboard-config                   apply /etc/limeboard/config.txt
-    limeboard-config show              list the buses and whether they are on
-    limeboard-config enable BUS        turn a bus on: i2c1, i2c0, spi0, spi1
-    limeboard-config disable BUS       turn a bus off
+    limeboard-config show              list the settings
+    limeboard-config enable ITEM       turn on: i2c1, i2c0, spi0, spi1, serial-console
+    limeboard-config disable ITEM      turn off
+    limeboard-config firmware          the STM32 firmware: running and shipped versions
+    limeboard-config firmware update   flash the shipped firmware (--force: even if the same)
 
 The buses are off until /etc/limeboard/config.txt turns them on, with the
 lines a Raspberry Pi's config.txt uses:
@@ -17,12 +18,16 @@ lines a Raspberry Pi's config.txt uses:
     dtoverlay=spi0-1cs        spi0 with CE0 only (also spi0-2cs)
     dtoverlay=spi1-1cs        spi1, /dev/spidev1.0 (also spi1-2cs, spi1-3cs)
 
-and, for a kernel driver on a chip select instead of spidev:
+for a kernel driver on a chip select instead of spidev:
 
     spi0_cs1=mcp3008
     spi1_cs0=mcp2515,irq=25,speed=10000000
 
-The settings go to /etc/modprobe.d/limeboard.conf, for the kernel's dln2
+and for a login console on the header UART (/dev/serial0, pins 8 and 10):
+
+    serial_console=on
+
+The bus settings go to /etc/modprobe.d/limeboard.conf, for the kernel's dln2
 drivers, and apply now when the buses are not in use; otherwise at the next
 reset of the board's STM32 or reboot.
 """
@@ -30,23 +35,33 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 CONFIG = "/etc/limeboard/config.txt"
 MODPROBE = "/etc/modprobe.d/limeboard.conf"
+CONSOLE = "/usr/libexec/limeboard-serial-console"
+CONSOLE_SERVICE = "limeboard-serial-console.service"
+INITTAB = "/etc/inittab"
+FIRMWARE = "/usr/share/limeboard/limeboard-io.bin"
+FIRMWARE_VERSION = "/usr/share/limeboard/limeboard-io.version"
+USB_ID = ("1209", "0001")       # the Limeboard I/O firmware
+DFU_ID = ("0483", "df11")       # the STM32's ROM bootloader
 
 # Pi name -> Limeboard dln2 port, and the chip selects of each SPI port
 I2C_PORTS = {"i2c1": 0, "i2c0": 1}
 SPI_CHIP_SELECTS = {"spi0": 2, "spi1": 3}
-# The line enable writes for each bus
+# The line enable writes for each item
 ENABLE_LINE = {
     "i2c1": "dtparam=i2c_arm=on",
     "i2c0": "dtoverlay=i2c0",
     "spi0": "dtparam=spi=on",
     "spi1": "dtoverlay=spi1-3cs",
+    "serial-console": "serial_console=on",
 }
 DTPARAMS = {"i2c_arm": "i2c1", "i2c": "i2c1", "i2c1": "i2c1", "i2c_vc": "i2c0",
             "i2c0": "i2c0", "spi": "spi0"}
 CS_DEVICE = re.compile(r"^(spi[01])_cs([0-3])$")
+ON = ("on", "true", "yes", "1", "")
 
 
 def warn(message):
@@ -65,8 +80,9 @@ def read_config(path=CONFIG):
 
 
 def parse(lines, path=CONFIG, warn=warn):
-    """Return {"i2c": set of Pi names, "spi": {(port, cs): device}}."""
-    i2c, spi = set(), {}
+    """Return {"i2c": set of Pi names, "spi": {(port, cs): device},
+    "serial_console": bool}."""
+    config = {"i2c": set(), "spi": {}, "serial_console": False}
     for number, raw in enumerate(lines, 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -79,44 +95,48 @@ def parse(lines, path=CONFIG, warn=warn):
                 bus = DTPARAMS.get(name.strip())
                 if bus is None:
                     warn(f"{path}:{number}: unknown dtparam {name.strip()!r}, ignored")
-                elif state.strip() in ("on", "true", "yes", "1", ""):
-                    _enable(bus, i2c, spi)
+                elif state.strip() in ON:
+                    _enable(bus, config)
                 else:
-                    _disable(bus, i2c, spi)
+                    _disable(bus, config)
         elif key == "dtoverlay":
             overlay = value.split(",")[0].split(":")[0]
             match = re.fullmatch(r"(spi[01])-([123])cs", overlay)
             if overlay == "i2c0":
-                i2c.add("i2c0")
+                config["i2c"].add("i2c0")
             elif match and int(match[2]) <= SPI_CHIP_SELECTS[match[1]]:
-                _enable(match[1], i2c, spi, int(match[2]))
+                _enable(match[1], config, int(match[2]))
             elif overlay:
                 warn(f"{path}:{number}: unknown dtoverlay {overlay!r}, ignored")
         elif CS_DEVICE.match(key):
             port, cs = CS_DEVICE.match(key).groups()
             if int(cs) < SPI_CHIP_SELECTS[port]:
-                spi[(port, int(cs))] = value or "none"
+                config["spi"][(port, int(cs))] = value or "none"
             else:
                 warn(f"{path}:{number}: {port} has no chip select {cs}, ignored")
+        elif key == "serial_console":
+            config["serial_console"] = value in ON
+        elif key == "enable_uart":
+            pass  # the header UART is always there
         else:
             warn(f"{path}:{number}: unknown setting {key!r}, ignored")
-    return {"i2c": i2c, "spi": spi}
+    return config
 
 
-def _enable(bus, i2c, spi, chip_selects=None):
+def _enable(bus, config, chip_selects=None):
     if bus in I2C_PORTS:
-        i2c.add(bus)
+        config["i2c"].add(bus)
         return
     for cs in range(chip_selects or SPI_CHIP_SELECTS[bus]):
-        spi.setdefault((bus, cs), "spidev")
+        config["spi"].setdefault((bus, cs), "spidev")
 
 
-def _disable(bus, i2c, spi):
+def _disable(bus, config):
     if bus in I2C_PORTS:
-        i2c.discard(bus)
+        config["i2c"].discard(bus)
         return
     for cs in range(SPI_CHIP_SELECTS[bus]):
-        spi.pop((bus, cs), None)
+        config["spi"].pop((bus, cs), None)
 
 
 def modprobe_options(config):
@@ -131,10 +151,17 @@ def modprobe_options(config):
 
 
 def run(*command):
-    return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    """Run a command quietly; False when it fails or does not exist."""
+    try:
+        return subprocess.run(command, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except OSError:
+        return False
 
 
-def apply(config):
+# Buses -----------------------------------------------------------------------
+
+def apply_buses(config):
     text = modprobe_options(config)
     try:
         old = open(MODPROBE).read()
@@ -155,8 +182,109 @@ def apply(config):
         run("modprobe", module)
 
 
+# Serial console ----------------------------------------------------------------
+
+def apply_serial_console(on):
+    """A login console on /dev/serial0: a systemd service, or a busybox
+    inittab line, both running CONSOLE."""
+    if os.path.isdir("/run/systemd/system"):
+        run("systemctl", "enable" if on else "disable", "--now", CONSOLE_SERVICE)
+        return
+    if not os.path.exists(INITTAB):
+        warn("no systemd and no inittab: start the serial console by hand")
+        return
+    line = f"::respawn:{CONSOLE}"
+    lines = read_lines(INITTAB)
+    present = line in lines
+    if on == present:
+        return
+    lines = lines + [line] if on else [l for l in lines if l != line]
+    with open(INITTAB, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    # busybox init rereads inittab: it starts a new entry and stops the
+    # processes of a removed one
+    run("kill", "-HUP", "1")
+
+
+# Firmware ------------------------------------------------------------------------
+
+def usb_device(ids):
+    """The sysfs directory of the USB device with these (vendor, product) ids."""
+    base = "/sys/bus/usb/devices"
+    for name in sorted(os.listdir(base)):
+        try:
+            vendor = open(f"{base}/{name}/idVendor").read().strip()
+            product = open(f"{base}/{name}/idProduct").read().strip()
+        except OSError:
+            continue
+        if (vendor, product) == ids:
+            return f"{base}/{name}"
+    return None
+
+
+def running_version():
+    device = usb_device(USB_ID)
+    if device is None:
+        return None
+    bcd = open(f"{device}/bcdDevice").read().strip()  # e.g. "0101"
+    return f"{int(bcd[:2])}.{int(bcd[2:])}"
+
+
+def shipped_version():
+    try:
+        return open(FIRMWARE_VERSION).read().strip()
+    except OSError:
+        return None
+
+
+def wait_for(ids, seconds):
+    for _ in range(seconds * 10):
+        if usb_device(ids):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def firmware(update=False, force=False):
+    running, shipped = running_version(), shipped_version()
+    in_bootloader = usb_device(DFU_ID) is not None
+    print(f"running: {running or ('none: the STM32 is in its bootloader' if in_bootloader else 'none')}")
+    print(f"shipped: {shipped or 'none'} ({FIRMWARE})")
+    if not update:
+        return
+    if shipped is None or not os.path.exists(FIRMWARE):
+        sys.exit("limeboard-config: no firmware to flash")
+    if running == shipped and not force:
+        print("already up to date (--force flashes anyway)")
+        return
+    if not in_bootloader:
+        if running is None:
+            sys.exit("limeboard-config: no Limeboard I/O firmware or bootloader found on USB")
+        print("restarting the STM32 into its bootloader...")
+        run("dfu-util", "-d", ":".join(USB_ID), "-e")
+        if not wait_for(DFU_ID, 10):
+            sys.exit("limeboard-config: the bootloader did not appear")
+    print(f"flashing {shipped}...")
+    result = subprocess.run(["dfu-util", "-d", ":".join(DFU_ID), "-a", "0",
+                             "-s", "0x08000000:leave", "-D", FIRMWARE],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0 and not wait_for(USB_ID, 1):
+        sys.exit(f"limeboard-config: dfu-util failed:\n{result.stderr.strip()}")
+    if not wait_for(USB_ID, 15):
+        sys.exit("limeboard-config: the firmware did not start; hold the user button "
+                 "while powering the board to reach the bootloader, then run this again")
+    print(f"running: {running_version()}")
+
+
+# Commands ------------------------------------------------------------------------
+
+def apply(config):
+    apply_buses(config)
+    apply_serial_console(config["serial_console"])
+
+
 def show(config):
-    for bus, port in I2C_PORTS.items():
+    for bus in I2C_PORTS:
         print(f"{bus}: {'on' if bus in config['i2c'] else 'off'}")
     for bus, count in SPI_CHIP_SELECTS.items():
         devices = [config["spi"].get((bus, cs)) for cs in range(count)]
@@ -164,36 +292,44 @@ def show(config):
             print(f"{bus}: on, " + ", ".join(f"CE{cs} {d}" for cs, d in enumerate(devices) if d))
         else:
             print(f"{bus}: off")
+    print(f"serial-console: {'on' if config['serial_console'] else 'off'} (/dev/serial0)")
+    print(f"firmware: {running_version() or 'not running'}")
 
 
-def buses(config):
-    return set(config["i2c"]) | {bus for bus, _ in config["spi"]}
+def items(config):
+    found = set(config["i2c"]) | {bus for bus, _ in config["spi"]}
+    if config["serial_console"]:
+        found.add("serial-console")
+    return found
 
 
-def edit(bus, on):
-    """Remove the lines that turn only this bus on, then add its line for on."""
+def edit(item, on):
+    """Remove the lines that turn only this item on, then add its line for on."""
     quiet = lambda message: None
     kept = [raw for raw in read_lines()
-            if buses(parse([raw], warn=quiet)) != {bus}]
+            if items(parse([raw], warn=quiet)) != {item}]
     if on:
-        kept.append(ENABLE_LINE[bus])
+        kept.append(ENABLE_LINE[item])
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     with open(CONFIG, "w") as f:
         f.write("\n".join(kept) + "\n")
-    if not on and bus in buses(read_config()):
-        warn(f"a line of {CONFIG} turns {bus} on with other buses: edit it")
+    if not on and item in items(read_config()):
+        warn(f"a line of {CONFIG} turns {item} on with other buses: edit it")
 
 
 def main(argv):
-    if len(argv) == 1:
+    args = argv[1:]
+    if not args:
         apply(read_config())
-    elif argv[1:] == ["show"]:
+    elif args == ["show"]:
         show(read_config())
-    elif len(argv) == 3 and argv[1] in ("enable", "disable") and argv[2] in ENABLE_LINE:
-        edit(argv[2], argv[1] == "enable")
+    elif len(args) == 2 and args[0] in ("enable", "disable") and args[1] in ENABLE_LINE:
+        edit(args[1], args[0] == "enable")
         config = read_config()
         apply(config)
         show(config)
+    elif args[:1] == ["firmware"] and args[1:] in ([], ["update"], ["update", "--force"]):
+        firmware(update="update" in args, force="--force" in args)
     else:
         sys.exit(__doc__.split("\n\n")[1])
 

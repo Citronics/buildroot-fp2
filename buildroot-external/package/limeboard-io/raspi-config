@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""raspi-config for the Limeboard: the non-interactive commands that HAT
+installers use, answered through limeboard-config.
+
+    raspi-config nonint do_i2c 0|1          i2c1 on (0) or off (1)
+    raspi-config nonint do_spi 0|1          spi0 on or off
+    raspi-config nonint do_serial_cons 0|1  login console on /dev/serial0
+    raspi-config nonint do_serial_hw 0|1    the UART (always on here)
+    raspi-config nonint get_i2c|get_spi|get_serial_cons|get_serial_hw
+                                            print 0 when on, 1 when off
+
+As in raspi-config, 0 means on. is_pi fails: this is not a Raspberry Pi.
+Everything else is done with limeboard-config.
+"""
+import os
+import subprocess
+import sys
+
+LIMEBOARD_CONFIG = os.environ.get("LIMEBOARD_CONFIG", "/usr/bin/limeboard-config")
+ITEMS = {"i2c": "i2c1", "spi": "spi0", "serial_cons": "serial-console"}
+
+
+def limeboard_config(*args):
+    return subprocess.run([LIMEBOARD_CONFIG, *args], capture_output=True, text=True)
+
+
+def is_on(item):
+    show = limeboard_config("show").stdout
+    return any(line.startswith(f"{item}: on") for line in show.splitlines())
+
+
+def set_item(item, value):
+    result = limeboard_config("enable" if value == "0" else "disable", item)
+    sys.stderr.write(result.stderr)
+    return result.returncode
+
+
+def nonint(command, args):
+    name = command.removeprefix("do_").removeprefix("get_")
+    if command == "is_pi":
+        return 1
+    if command.startswith("get_") and name in ITEMS:
+        print(0 if is_on(ITEMS[name]) else 1)
+        return 0
+    if command.startswith("do_") and name in ITEMS and args[:1] in (["0"], ["1"]):
+        return set_item(ITEMS[name], args[0])
+    if command == "get_serial_hw":
+        print(0)
+        return 0
+    if command == "do_serial_hw" and args[:1] in (["0"], ["1"]):
+        if args[0] == "1":
+            print("raspi-config: the Limeboard's UART cannot be turned off", file=sys.stderr)
+        return 0
+    if command == "get_serial":  # older raspi-config: the console
+        print(0 if is_on("serial-console") else 1)
+        return 0
+    if command == "do_serial" and args[:1] in (["0"], ["1"], ["2"]):
+        return set_item("serial-console", "0" if args[0] == "0" else "1")
+    if command == "get_onewire":
+        print(1)
+        return 0
+    print(f"raspi-config: {command} is not available on the Limeboard; "
+          "see limeboard-config", file=sys.stderr)
+    return 1
+
+
+def main(argv):
+    if len(argv) >= 3 and argv[1] == "nonint":
+        return nonint(argv[2], argv[3:])
+    print("This is a Citronics Limeboard, not a Raspberry Pi. Its header is set up "
+          "with limeboard-config:\n")
+    subprocess.run([LIMEBOARD_CONFIG, "help"])
+    return 0 if len(argv) == 1 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

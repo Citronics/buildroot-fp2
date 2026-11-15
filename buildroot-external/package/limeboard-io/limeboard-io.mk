@@ -13,6 +13,17 @@ define LIMEBOARD_IO_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/etc/limeboard/config.txt
 	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard.conf \
 		$(TARGET_DIR)/etc/modprobe.d/limeboard.conf
+	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/limeboard-serial-console \
+		$(TARGET_DIR)/usr/libexec/limeboard-serial-console
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-io.bin \
+		$(TARGET_DIR)/usr/share/limeboard/limeboard-io.bin
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-io.version \
+		$(TARGET_DIR)/usr/share/limeboard/limeboard-io.version
+endef
+
+define LIMEBOARD_IO_INSTALL_INIT_SYSTEMD
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-serial-console.service \
+		$(TARGET_DIR)/usr/lib/systemd/system/limeboard-serial-console.service
 endef
 
 ifeq ($(BR2_PACKAGE_PYTHON3),y)
@@ -21,6 +32,8 @@ LIMEBOARD_IO_DEPENDENCIES += python3
 define LIMEBOARD_IO_INSTALL_CONFIG_TOOL
 	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/limeboard-config \
 		$(TARGET_DIR)/usr/bin/limeboard-config
+	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/raspi-config \
+		$(TARGET_DIR)/usr/bin/raspi-config
 endef
 LIMEBOARD_IO_POST_INSTALL_TARGET_HOOKS += LIMEBOARD_IO_INSTALL_CONFIG_TOOL
 endif
