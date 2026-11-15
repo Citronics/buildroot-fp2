@@ -31,6 +31,6 @@ def I2C():
 
 
 def SPI():
-    """The board's SPI bus. Fails until /dev/spidev exists on the Limeboard."""
+    """The board's SPI bus (header pins 19, 21, 23; chip selects 24 and 26)."""
     import busio
     return busio.SPI(SCLK, MOSI, MISO)

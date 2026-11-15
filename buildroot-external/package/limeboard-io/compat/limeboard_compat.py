@@ -51,6 +51,14 @@ def i2c_bus():
     return None
 
 
+def spi_bus():
+    """Return B of the Limeboard's /dev/spidevB.C, or None."""
+    for name in _entries("/sys/class/spi_master", "spi"):
+        if "/dln2-spi." in os.path.realpath("/sys/class/spi_master/" + name):
+            return int(name[len("spi"):])
+    return None
+
+
 class _AliasLoader:
     """Import a module under another name: the same module object."""
 

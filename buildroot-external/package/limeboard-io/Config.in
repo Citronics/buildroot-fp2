@@ -7,8 +7,9 @@ config BR2_PACKAGE_LIMEBOARD_IO
 	  Raspberry Pi style header as standard Linux devices through
 	  the kernel's dln2 drivers (GPIO chip "dln2", I2C, SPI, ADC)
 	  and a USB serial port for the header UART. Installs the udev
-	  rule that binds dln2 to the firmware's USB ID, and dfu-util
-	  to update the firmware.
+	  rule that binds dln2 to the firmware's USB ID, the SPI chip
+	  select settings (/etc/modprobe.d/limeboard-spi.conf), and
+	  dfu-util to update the firmware.
 
 	  Needs CONFIG_MFD_DLN2, GPIO_DLN2, I2C_DLN2, SPI_DLN2 and
 	  DLN2_ADC in the kernel.
@@ -33,13 +34,15 @@ config BR2_PACKAGE_LIMEBOARD_IO_PI_COMPAT
 	depends on BR2_arm # python-gpiozero
 	select BR2_PACKAGE_LIMEBOARD_IO_GPIOZERO
 	select BR2_PACKAGE_PYTHON_RPI_LGPIO
+	select BR2_PACKAGE_PYTHON_SPIDEV
 	help
 	  Raspberry Pi GPIO code runs on the header without setup:
 	  when the Limeboard I/O firmware is present, Python programs
 	  start with gpiozero's "limeboard" pin factory selected,
 	  RPi.GPIO (rpi-lgpio) on the Limeboard's GPIO chip, and the
 	  Limeboard's board definition for Adafruit Blinka, when
-	  Blinka is installed. LIMEBOARD_COMPAT=0 turns it off.
+	  Blinka is installed, and py-spidev for /dev/spidev.
+	  LIMEBOARD_COMPAT=0 turns it off.
 
 comment "gpiozero and Raspberry Pi compatibility need python3"
 	depends on !BR2_PACKAGE_PYTHON3

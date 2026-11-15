@@ -9,6 +9,8 @@ LIMEBOARD_IO_DEPENDENCIES = dfu-util
 define LIMEBOARD_IO_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/90-limeboard-io.rules \
 		$(TARGET_DIR)/usr/lib/udev/rules.d/90-limeboard-io.rules
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-spi.conf \
+		$(TARGET_DIR)/etc/modprobe.d/limeboard-spi.conf
 endef
 
 ifeq ($(BR2_PACKAGE_LIMEBOARD_IO_GPIOZERO),y)
@@ -28,7 +30,7 @@ LIMEBOARD_IO_POST_INSTALL_TARGET_HOOKS += LIMEBOARD_IO_INSTALL_GPIOZERO
 endif
 
 ifeq ($(BR2_PACKAGE_LIMEBOARD_IO_PI_COMPAT),y)
-LIMEBOARD_IO_DEPENDENCIES += python-rpi-lgpio
+LIMEBOARD_IO_DEPENDENCIES += python-rpi-lgpio python-spidev
 
 define LIMEBOARD_IO_INSTALL_PI_COMPAT
 	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/compat/limeboard_compat.py \

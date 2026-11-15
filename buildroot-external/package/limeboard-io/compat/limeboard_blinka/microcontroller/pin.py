@@ -7,7 +7,7 @@ RGB LED and the user button.
 import lgpio
 from adafruit_blinka.microcontroller.generic_linux import lgpio_pin
 
-from limeboard_compat import gpio_chip, i2c_bus
+from limeboard_compat import gpio_chip, i2c_bus, spi_bus
 
 _chip = gpio_chip()
 if _chip is None:
@@ -35,9 +35,10 @@ TXD, RXD = D14, D15
 # Onboard: one RGB LED (a line per colour channel) and the user button
 LED_R, LED_G, LED_B, BUTTON = Pin(28), Pin(29), Pin(30), Pin(31)
 
-_bus = i2c_bus()
-i2cPorts = ((_bus, SCL, SDA),) if _bus is not None else ()
-# No /dev/spidev exists for the Limeboard's SPI bus yet. The UART is a USB
-# serial port (/dev/ttyACM*): open it with pyserial.
-spiPorts = ((0, SCLK, MOSI, MISO),)
+_i2c = i2c_bus()
+i2cPorts = ((_i2c, SCL, SDA),) if _i2c is not None else ()
+# /dev/spidevB.0 and B.1, created by the kernel's spi-dln2 driver
+_spi = spi_bus()
+spiPorts = ((_spi, SCLK, MOSI, MISO),) if _spi is not None else ()
+# The UART is a USB serial port (/dev/ttyACM*): open it with pyserial
 uartPorts = ()
