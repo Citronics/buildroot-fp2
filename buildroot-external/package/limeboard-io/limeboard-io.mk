@@ -15,10 +15,6 @@ define LIMEBOARD_IO_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/etc/modprobe.d/limeboard.conf
 	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/limeboard-serial-console \
 		$(TARGET_DIR)/usr/libexec/limeboard-serial-console
-	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-io.bin \
-		$(TARGET_DIR)/usr/share/limeboard/limeboard-io.bin
-	$(INSTALL) -D -m 0644 $(LIMEBOARD_IO_PKGDIR)/limeboard-io.version \
-		$(TARGET_DIR)/usr/share/limeboard/limeboard-io.version
 endef
 
 define LIMEBOARD_IO_INSTALL_INIT_SYSTEMD

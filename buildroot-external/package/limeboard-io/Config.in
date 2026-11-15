@@ -2,6 +2,7 @@ config BR2_PACKAGE_LIMEBOARD_IO
 	bool "limeboard-io"
 	depends on BR2_PACKAGE_HAS_UDEV
 	select BR2_PACKAGE_DFU_UTIL
+	select BR2_PACKAGE_LIMEBOARD_IO_FIRMWARE if BR2_PACKAGE_HOST_ARM_GNU_TOOLCHAIN_SUPPORTS
 	help
 	  The Limeboard's STM32 with the Limeboard I/O firmware: its
 	  Raspberry Pi style header as standard Linux devices through

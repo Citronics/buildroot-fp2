@@ -1,0 +1,8 @@
+config BR2_PACKAGE_LIMEBOARD_IO_FIRMWARE
+	bool "limeboard-io-firmware"
+	depends on BR2_PACKAGE_HOST_ARM_GNU_TOOLCHAIN_SUPPORTS
+	help
+	  The Limeboard I/O firmware for the Limeboard's STM32F401,
+	  built from source with the Arm GNU toolchain. Installs
+	  /usr/share/limeboard/limeboard-io.bin and its version, which
+	  "limeboard-config firmware update" flashes over USB DFU.
