@@ -4,10 +4,13 @@
 #
 ################################################################################
 
-LIMEBOARD_IO_FIRMWARE_VERSION = c394d0ead1508423e2e0f63a87ec6555eb73d7b5
-LIMEBOARD_IO_FIRMWARE_SITE = file:///var/home/marc/Projects/citronics/limeboard-firmware
+LIMEBOARD_IO_FIRMWARE_VERSION = fefb5c426adaeaaf631302efba1a0c729f5091cd
+LIMEBOARD_IO_FIRMWARE_SITE = https://github.com/Citronics/limeboard-firmware.git
 LIMEBOARD_IO_FIRMWARE_SITE_METHOD = git
 LIMEBOARD_IO_FIRMWARE_GIT_SUBMODULES = YES
+LIMEBOARD_IO_FIRMWARE_LICENSE = MIT, MIT (TinyUSB), Apache-2.0 (CMSIS)
+LIMEBOARD_IO_FIRMWARE_LICENSE_FILES = LICENSE lib/tinyusb/LICENSE \
+	lib/cmsis-device-f4/LICENSE.md lib/cmsis-core/LICENSE.md
 LIMEBOARD_IO_FIRMWARE_DEPENDENCIES = host-arm-gnu-toolchain
 
 define LIMEBOARD_IO_FIRMWARE_BUILD_CMDS

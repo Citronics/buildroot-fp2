@@ -1,0 +1,6 @@
+# Locally computed
+sha256  fd7e22fca5f5e0ca6560dc0173e00cff68ec795429dc939364d9bf829c103c35  limeboard-io-firmware-fefb5c426adaeaaf631302efba1a0c729f5091cd-git4.tar.gz
+sha256  30f376f5b894c7d77db4ac741fccf7f464a1056cd0246e82728d8b97ed75fd47  LICENSE
+sha256  b171720e8a442e7a3957d83c62cd3299dbb29da3db534cc626f9dded0de2ca44  lib/tinyusb/LICENSE
+sha256  dadb755f51d36614173b28c5790cb4a991e8f4cc822e5b634fd66a4f4145824d  lib/cmsis-device-f4/LICENSE.md
+sha256  74bd6056782f02fd8b23ebf2e9a69ce513d9c94a16cfdfda8545d2e1a6ed0f73  lib/cmsis-core/LICENSE.md
