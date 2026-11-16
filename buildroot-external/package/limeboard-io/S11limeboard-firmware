@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# S11limeboard-firmware - a newer packaged Limeboard I/O firmware goes onto
+# the STM32 (in the background: the board waits for USB, boot does not)
+#
+
+case "$1" in
+	start)
+		printf 'Checking the Limeboard I/O firmware: '
+		(sleep 5; /usr/bin/limeboard-config firmware update --auto) \
+			>/var/log/limeboard-firmware.log 2>&1 &
+		echo "OK"
+		;;
+	stop|restart|reload)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac

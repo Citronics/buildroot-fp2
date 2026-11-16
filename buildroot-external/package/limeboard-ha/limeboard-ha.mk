@@ -4,12 +4,16 @@
 #
 ################################################################################
 
+LIMEBOARD_HA_VERSION = 89991a59a0d5182bc8f2e6e92925ee1596ca8a85
+LIMEBOARD_HA_SITE = https://github.com/Citronics/limeboard-extras.git
+LIMEBOARD_HA_SITE_METHOD = git
 LIMEBOARD_HA_LICENSE = MIT
+LIMEBOARD_HA_LICENSE_FILES = LICENSE
 LIMEBOARD_HA_DEPENDENCIES = python3 python-paho-mqtt python-psutil limeboard-io
 
 define LIMEBOARD_HA_INSTALL_TARGET_CMDS
-	$(INSTALL) -D -m 0755 $(LIMEBOARD_HA_PKGDIR)/limeboard-ha $(TARGET_DIR)/usr/bin/limeboard-ha
-	$(INSTALL) -D -m 0600 $(LIMEBOARD_HA_PKGDIR)/limeboard-ha.conf $(TARGET_DIR)/etc/limeboard-ha.conf
+	$(INSTALL) -D -m 0755 $(@D)/limeboard-ha/limeboard-ha $(TARGET_DIR)/usr/bin/limeboard-ha
+	$(INSTALL) -D -m 0600 $(@D)/limeboard-ha/limeboard-ha.conf $(TARGET_DIR)/etc/limeboard-ha.conf
 endef
 
 define LIMEBOARD_HA_INSTALL_INIT_SYSV
