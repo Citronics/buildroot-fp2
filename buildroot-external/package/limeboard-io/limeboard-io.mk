@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-LIMEBOARD_IO_VERSION = 89991a59a0d5182bc8f2e6e92925ee1596ca8a85
+LIMEBOARD_IO_VERSION = v1.0
 LIMEBOARD_IO_SITE = https://github.com/Citronics/limeboard-extras.git
 LIMEBOARD_IO_SITE_METHOD = git
 LIMEBOARD_IO_LICENSE = MIT

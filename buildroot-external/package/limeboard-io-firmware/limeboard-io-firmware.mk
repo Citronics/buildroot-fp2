@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-LIMEBOARD_IO_FIRMWARE_VERSION = fefb5c426adaeaaf631302efba1a0c729f5091cd
+LIMEBOARD_IO_FIRMWARE_VERSION = v1.3
 LIMEBOARD_IO_FIRMWARE_SITE = https://github.com/Citronics/limeboard-firmware.git
 LIMEBOARD_IO_FIRMWARE_SITE_METHOD = git
 LIMEBOARD_IO_FIRMWARE_GIT_SUBMODULES = YES
