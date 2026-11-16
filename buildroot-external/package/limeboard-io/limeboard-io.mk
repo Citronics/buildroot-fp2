@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-LIMEBOARD_IO_VERSION = v1.0
+LIMEBOARD_IO_VERSION = v1.0.1
 LIMEBOARD_IO_SITE = https://github.com/Citronics/limeboard-extras.git
 LIMEBOARD_IO_SITE_METHOD = git
 LIMEBOARD_IO_LICENSE = MIT
@@ -27,13 +27,19 @@ define LIMEBOARD_IO_INSTALL_INIT_SYSTEMD
 		$(TARGET_DIR)/usr/lib/systemd/system/limeboard-serial-console.service
 	$(INSTALL) -D -m 0644 $(@D)/limeboard-config/limeboard-firmware-update.service \
 		$(TARGET_DIR)/usr/lib/systemd/system/limeboard-firmware-update.service
+	$(INSTALL) -D -m 0644 $(@D)/limeboard-config/limeboard-config.service \
+		$(TARGET_DIR)/usr/lib/systemd/system/limeboard-config.service
+	mkdir -p $(TARGET_DIR)/etc/systemd/system/multi-user.target.wants
+	ln -sf ../../../../usr/lib/systemd/system/limeboard-config.service \
+		$(TARGET_DIR)/etc/systemd/system/multi-user.target.wants/limeboard-config.service
 endef
 
-# The STM32 gets a newer packaged firmware at boot (limeboard-config)
+# At boot, config.txt applies and the STM32 gets a newer packaged firmware
+# (limeboard-config)
 ifeq ($(BR2_PACKAGE_PYTHON3),y)
 define LIMEBOARD_IO_INSTALL_INIT_SYSV
-	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/S11limeboard-firmware \
-		$(TARGET_DIR)/etc/init.d/S11limeboard-firmware
+	$(INSTALL) -D -m 0755 $(LIMEBOARD_IO_PKGDIR)/S11limeboard \
+		$(TARGET_DIR)/etc/init.d/S11limeboard
 endef
 endif
 

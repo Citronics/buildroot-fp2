@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# S11limeboard - applies /etc/limeboard/config.txt (the header buses and the
+# serial console), then puts a newer packaged Limeboard I/O firmware on the
+# STM32. Both run in the background: the board waits for USB, boot does not.
+#
+
+case "$1" in
+	start)
+		printf 'Starting Limeboard: '
+		(/usr/bin/limeboard-config; sleep 5; /usr/bin/limeboard-config firmware update --auto) \
+			>/var/log/limeboard.log 2>&1 &
+		echo "OK"
+		;;
+	stop|restart|reload)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac
