@@ -23,7 +23,7 @@ BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh"
 BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_CITRONICS_PATH)/board/fairphone2/genimage.cfg"
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_GIT=y
-BR2_LINUX_KERNEL_CUSTOM_REPO_URL="file:///var/home/marc/Projects/linux-msm8x74"
+BR2_LINUX_KERNEL_CUSTOM_REPO_URL="https://github.com/mlainez/linux-msm8x74.git"
 # Pin by full commit SHA, never a branch ref: buildroot's download cache
 # snapshots branch refs and silently serves stale trees (LAB-OPERATIONS 7.3).
 # 02d768689518 = 6.18/baseline: v6.18.41 (latest LTS) + 6.18/topic/adsp-sensors
