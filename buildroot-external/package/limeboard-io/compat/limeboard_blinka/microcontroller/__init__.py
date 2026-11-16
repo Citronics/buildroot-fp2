@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`microcontroller` for the Limeboard: the STM32 behind the header, reached
 through the citronics-dln2 driver."""
 import time

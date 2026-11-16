@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # The login console on the Limeboard header's UART (/dev/serial0, pins 8 and
 # 10): wait for the Limeboard I/O firmware's serial port, then run getty on
 # it. getty ends when the STM32 resets; the service or inittab entry starts

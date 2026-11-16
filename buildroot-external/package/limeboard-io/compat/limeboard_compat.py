@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Raspberry Pi GPIO libraries on the Limeboard.
 
 At Python startup (through limeboard_compat.pth), and only when the

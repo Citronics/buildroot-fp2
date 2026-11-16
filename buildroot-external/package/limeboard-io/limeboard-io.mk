@@ -4,6 +4,7 @@
 #
 ################################################################################
 
+LIMEBOARD_IO_LICENSE = MIT
 LIMEBOARD_IO_DEPENDENCIES = dfu-util
 
 define LIMEBOARD_IO_INSTALL_TARGET_CMDS

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """limeboard-ha: the Limeboard as a Home Assistant device, over MQTT discovery.
 
 Publishes the phone's system state every INTERVAL seconds (psutil), its

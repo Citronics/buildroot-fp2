@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """gpiozero pin factory for the Limeboard header.
 
 The Limeboard I/O firmware on the board's STM32 makes the header a Linux

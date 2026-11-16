@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """`board` for the Limeboard: Raspberry Pi pin names (D0-D27, SDA, SCL, ...)
 plus the onboard LED_R, LED_G, LED_B and BUTTON."""
 from microcontroller import pin

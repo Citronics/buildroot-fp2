@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Adafruit Blinka's board definition for the Limeboard.
 
 limeboard_compat makes these modules Blinka's `board`, `microcontroller` and

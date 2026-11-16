@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Pins of the Limeboard header for Adafruit Blinka.
 
 Blinka's own lgpio Pin class, on the GPIO chip of the Limeboard I/O firmware.

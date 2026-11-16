@@ -4,6 +4,7 @@
 #
 ################################################################################
 
+LIMEBOARD_HA_LICENSE = MIT
 LIMEBOARD_HA_DEPENDENCIES = python3 python-paho-mqtt python-psutil limeboard-io
 
 define LIMEBOARD_HA_INSTALL_TARGET_CMDS
