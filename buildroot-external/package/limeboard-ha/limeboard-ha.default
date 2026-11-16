@@ -1,0 +1,3 @@
+# The Home Assistant agent starts at boot only with ENABLED=yes.
+# "limeboard-config ha setup" sets up the broker and turns it on.
+ENABLED=no

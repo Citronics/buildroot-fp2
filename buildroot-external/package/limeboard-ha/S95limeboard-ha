@@ -7,6 +7,10 @@ DAEMON="limeboard-ha"
 PIDFILE="/var/run/${DAEMON}.pid"
 LOGFILE="/var/log/${DAEMON}.log"
 
+# Opt-in: limeboard-config ha enable sets ENABLED=yes
+ENABLED=no
+[ -r "/etc/default/${DAEMON}" ] && . "/etc/default/${DAEMON}"
+
 start() {
 	printf 'Starting %s: ' "$DAEMON"
 	start-stop-daemon --start --background --make-pidfile \
@@ -42,13 +46,22 @@ stop() {
 }
 
 case "$1" in
-	start|stop)
-		"$1"
+	start)
+		if [ "$ENABLED" != yes ]; then
+			echo "$DAEMON is off (limeboard-config ha setup)"
+			exit 0
+		fi
+		start
+		;;
+	stop)
+		stop
 		;;
 	restart|reload)
 		stop
 		sleep 1
-		start
+		if [ "$ENABLED" = yes ]; then
+			start
+		fi
 		;;
 	*)
 		echo "Usage: $0 {start|stop|restart|reload}"

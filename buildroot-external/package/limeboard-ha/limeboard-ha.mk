@@ -14,6 +14,8 @@ LIMEBOARD_HA_DEPENDENCIES = python3 python-paho-mqtt python-psutil limeboard-io
 define LIMEBOARD_HA_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/limeboard-ha/limeboard-ha $(TARGET_DIR)/usr/bin/limeboard-ha
 	$(INSTALL) -D -m 0600 $(@D)/limeboard-ha/limeboard-ha.conf $(TARGET_DIR)/etc/limeboard-ha.conf
+	$(INSTALL) -D -m 0644 $(LIMEBOARD_HA_PKGDIR)/limeboard-ha.default \
+		$(TARGET_DIR)/etc/default/limeboard-ha
 endef
 
 define LIMEBOARD_HA_INSTALL_INIT_SYSV
