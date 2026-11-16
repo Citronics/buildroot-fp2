@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-LIMEBOARD_HA_VERSION = v1.0.1
+LIMEBOARD_HA_VERSION = v1.0.3
 LIMEBOARD_HA_SITE = https://github.com/Citronics/limeboard-extras.git
 LIMEBOARD_HA_SITE_METHOD = git
 LIMEBOARD_HA_LICENSE = MIT
