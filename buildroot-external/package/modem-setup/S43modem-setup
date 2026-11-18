@@ -7,6 +7,16 @@
 case "$1" in
 start)
 	printf 'Setting up the modem: '
+	# The modem comes up late (on the FP2, about 35 s after boot): wait until
+	# it answers QMI, on its device node (FP2) or over QRTR (FP3), through
+	# qmi-proxy: S39sim-selector leaves the proxy holding the device.
+	count=0
+	until qmicli --silent -p -d /dev/wwan0qmi0 --dms-noop >/dev/null 2>&1 ||
+	      qmicli --silent -pd qrtr://0 --dms-noop >/dev/null 2>&1; do
+		[ "$count" -ge 60 ] && break
+		sleep 1
+		count=$((count+1))
+	done
 	/usr/libexec/msm-modem-attach-apn 2>&1 | logger -t modem-setup
 	echo "OK"
 	;;

@@ -16,7 +16,8 @@ CONNECTIONS="/etc/NetworkManager/system-connections /run/NetworkManager/system-c
 
 # The FP2 modem has a QMI device node; the FP3 modem is reached over QRTR
 if [ -e /dev/wwan0qmi0 ]; then
-	Q="qmicli --silent -d /dev/wwan0qmi0 --device-open-qmi"
+	# Through qmi-proxy, which may already hold the device (SIM selection)
+	Q="qmicli --silent -p -d /dev/wwan0qmi0"
 else
 	Q="qmicli --silent -pd qrtr://0"
 fi
