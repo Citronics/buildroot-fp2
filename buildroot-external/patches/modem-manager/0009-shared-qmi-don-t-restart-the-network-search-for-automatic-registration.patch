@@ -1,0 +1,102 @@
+From 49541e7b34f15adab960e1ef81877c895a7da26a Mon Sep 17 00:00:00 2001
+From: Marc Lainez <marc.lainez@gmail.com>
+Date: Wed, 18 Nov 2026 00:41:34 +0100
+Subject: shared-qmi: don't restart the network search for automatic
+ registration
+
+Setting the network selection preference restarts the network search on
+some modems, such as the Fairphone 2's MSM8974, even when the preference
+does not change. Simple connect requests automatic registration while
+the modem is still searching after enabling it: on that modem the search
+restarted, adding 75 to 140 seconds before registration. Request it only
+when the modem is not in automatic network selection already.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+ src/mm-shared-qmi.c | 63 ++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 57 insertions(+), 6 deletions(-)
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index 785a3324..d0f33d14 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -450,12 +450,12 @@ out:
+ }
+ 
+ static void
+-register_in_network_sssp (GTask        *task,
+-                          QmiClient    *client,
+-                          GCancellable *cancellable,
+-                          guint16       mcc,
+-                          guint16       mnc,
+-                          gboolean      mnc_pcs_digit)
++register_in_network_sssp_set (GTask        *task,
++                              QmiClient    *client,
++                              GCancellable *cancellable,
++                              guint16       mcc,
++                              guint16       mnc,
++                              gboolean      mnc_pcs_digit)
+ {
+     QmiMessageNasSetSystemSelectionPreferenceInput *input;
+ 
+@@ -486,6 +486,57 @@ register_in_network_sssp (GTask        *task,
+     qmi_message_nas_set_system_selection_preference_input_unref (input);
+ }
+ 
++static void
++get_system_selection_preference_automatic_ready (QmiClientNas *client,
++                                                 GAsyncResult *res,
++                                                 GTask        *task)
++{
++    g_autoptr(QmiMessageNasGetSystemSelectionPreferenceOutput) output = NULL;
++    QmiNasNetworkSelectionPreference                           preference;
++    RegisterInNetworkContext                                  *ctx;
++
++    ctx = g_task_get_task_data (task);
++
++    output = qmi_client_nas_get_system_selection_preference_finish (client, res, NULL);
++    if (output &&
++        qmi_message_nas_get_system_selection_preference_output_get_result (output, NULL) &&
++        qmi_message_nas_get_system_selection_preference_output_get_network_selection_preference (output, &preference, NULL) &&
++        preference == QMI_NAS_NETWORK_SELECTION_PREFERENCE_AUTOMATIC) {
++        mm_obj_dbg (g_task_get_source_object (task),
++                    "network selection already automatic: not restarting the network search");
++        g_task_return_boolean (task, TRUE);
++        g_object_unref (task);
++        return;
++    }
++
++    register_in_network_sssp_set (task, QMI_CLIENT (client), ctx->cancellable, 0, 0, FALSE);
++}
++
++/* Setting the network selection preference restarts the network search on
++ * some modems (e.g. the Fairphone 2's MSM8974), even when it does not change:
++ * automatic registration is only requested when the modem is not in automatic
++ * network selection already. */
++static void
++register_in_network_sssp (GTask        *task,
++                          QmiClient    *client,
++                          GCancellable *cancellable,
++                          guint16       mcc,
++                          guint16       mnc,
++                          gboolean      mnc_pcs_digit)
++{
++    if (mcc) {
++        register_in_network_sssp_set (task, client, cancellable, mcc, mnc, mnc_pcs_digit);
++        return;
++    }
++
++    qmi_client_nas_get_system_selection_preference (QMI_CLIENT_NAS (client),
++                                                    NULL,
++                                                    10,
++                                                    cancellable,
++                                                    (GAsyncReadyCallback)get_system_selection_preference_automatic_ready,
++                                                    task);
++}
++
+ void
+ mm_shared_qmi_3gpp_register_in_network (MMIfaceModem3gpp    *self,
+                                         const gchar         *operator_id,
+-- 
+2.43.0
+

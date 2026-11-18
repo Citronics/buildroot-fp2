@@ -1,0 +1,8 @@
+config BR2_PACKAGE_MODEM_SETUP
+	bool "modem-setup"
+	depends on BR2_PACKAGE_MODEM_MANAGER
+	help
+	  Modem setup for the Fairphone 2 and 3: before ModemManager,
+	  prefer LTE and set the LTE attach APN from the NetworkManager
+	  GSM connection; once registered on 2G or 3G, move to LTE once.
+	  The same scripts as the citronics-lime-fp2/fp3 Debian packages.

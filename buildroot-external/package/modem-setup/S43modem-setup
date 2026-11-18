@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# S43modem-setup - Before ModemManager (S44): prefer LTE and set the LTE
+# attach APN from the NetworkManager GSM connection.
+#
+
+case "$1" in
+start)
+	printf 'Setting up the modem: '
+	/usr/libexec/msm-modem-attach-apn 2>&1 | logger -t modem-setup
+	echo "OK"
+	;;
+stop|restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac

@@ -1,0 +1,39 @@
+From 7dc21c7e7da92a9bd9648b01e3f62fabea736663 Mon Sep 17 00:00:00 2001
+From: Marc Lainez <marc.lainez@gmail.com>
+Date: Wed, 18 Nov 2026 00:04:38 +0100
+Subject: bearer-properties: loosely match allowed auth methods within
+ each other
+
+A modem stores only the authentication methods it supports: a QMI
+profile keeps PAP and CHAP. NetworkManager allows all methods for the
+initial EPS bearer, so the settings reloaded after an update never
+matched the requested ones and the update was reported as failed, and
+the same settings were never recognized as already applied, power
+cycling the modem on every connection.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+ libmm-glib/mm-bearer-properties.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/libmm-glib/mm-bearer-properties.c b/libmm-glib/mm-bearer-properties.c
+index e5e7e3d2..1a57f273 100644
+--- a/libmm-glib/mm-bearer-properties.c
++++ b/libmm-glib/mm-bearer-properties.c
+@@ -950,6 +950,13 @@ cmp_allowed_auth (MMBearerAllowedAuth        a,
+             (a == MM_BEARER_ALLOWED_AUTH_UNKNOWN && b == MM_BEARER_ALLOWED_AUTH_CHAP) ||
+             (b == MM_BEARER_ALLOWED_AUTH_UNKNOWN && a == MM_BEARER_ALLOWED_AUTH_CHAP) )
+             return TRUE;
++        /* A modem stores only the methods it supports (e.g. PAP and CHAP for
++         * QMI profiles): one set of methods within the other matches, as when
++         * all methods are allowed (NetworkManager's default for the initial
++         * EPS bearer) and the modem reports the ones it stored. */
++        if (a != MM_BEARER_ALLOWED_AUTH_UNKNOWN && b != MM_BEARER_ALLOWED_AUTH_UNKNOWN &&
++            ((a & b) == a || (a & b) == b))
++            return TRUE;
+     }
+     return FALSE;
+ }
+-- 
+2.43.0
+

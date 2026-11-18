@@ -1,0 +1,54 @@
+From 49d2d32787f04368eaa7213ea6d1c4a2d36b4b5f Mon Sep 17 00:00:00 2001
+From: Marc Lainez <marc.lainez@gmail.com>
+Date: Tue, 17 Nov 2026 22:51:28 +0100
+Subject: broadband-modem-qmi: omit an empty profile name when storing
+ profiles
+
+Older QMI firmware, such as the Fairphone 2's MSM8974 modem, rejects a
+Create or Modify Profile request carrying a zero-length Profile Name TLV
+with the DS profile error 'invalid-parameter-length'. Initial EPS bearer
+settings carry no profile name, so setting them always failed there.
+
+Assisted-by: Claude:claude-opus-5-5
+---
+ src/mm-broadband-modem-qmi.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/mm-broadband-modem-qmi.c b/src/mm-broadband-modem-qmi.c
+index 48863c09..c1574a89 100644
+--- a/src/mm-broadband-modem-qmi.c
++++ b/src/mm-broadband-modem-qmi.c
+@@ -6818,6 +6818,10 @@ create_profile_ready (QmiClientWds *client,
+     g_object_unref (task);
+ }
+ 
++/* An empty profile name is left out of the request: older firmware (e.g. the
++ * MSM8974 modem of the Fairphone 2) rejects a zero-length Profile Name TLV
++ * with the DS profile error 'invalid-parameter-length'. Empty username and
++ * password TLVs are accepted, and clear the stored values. */
+ static void
+ store_profile_run (GTask *task)
+ {
+@@ -6833,7 +6837,8 @@ store_profile_run (GTask *task)
+         /* when creating, we cannot select which profile id to use */
+         input = qmi_message_wds_create_profile_input_new ();
+         qmi_message_wds_create_profile_input_set_profile_type (input, QMI_WDS_PROFILE_TYPE_3GPP, NULL);
+-        qmi_message_wds_create_profile_input_set_profile_name (input, ctx->profile_name, NULL);
++        if (ctx->profile_name && ctx->profile_name[0])
++            qmi_message_wds_create_profile_input_set_profile_name (input, ctx->profile_name, NULL);
+         qmi_message_wds_create_profile_input_set_pdp_type (input, ctx->qmi_pdp_type, NULL);
+         qmi_message_wds_create_profile_input_set_apn_name (input, ctx->apn, NULL);
+         qmi_message_wds_create_profile_input_set_authentication (input, ctx->qmi_auth, NULL);
+@@ -6854,7 +6859,8 @@ store_profile_run (GTask *task)
+ 
+         input = qmi_message_wds_modify_profile_input_new ();
+         qmi_message_wds_modify_profile_input_set_profile_identifier (input, QMI_WDS_PROFILE_TYPE_3GPP, ctx->profile_id, NULL);
+-        qmi_message_wds_modify_profile_input_set_profile_name (input, ctx->profile_name, NULL);
++        if (ctx->profile_name && ctx->profile_name[0])
++            qmi_message_wds_modify_profile_input_set_profile_name (input, ctx->profile_name, NULL);
+         qmi_message_wds_modify_profile_input_set_pdp_type (input, ctx->qmi_pdp_type, NULL);
+         qmi_message_wds_modify_profile_input_set_apn_name (input, ctx->apn, NULL);
+         qmi_message_wds_modify_profile_input_set_authentication (input, ctx->qmi_auth, NULL);
+-- 
+2.43.0
+
