@@ -1,0 +1,42 @@
+#!/bin/sh
+# Serve the modem's storage from files that persist, instead of the eMMC
+# partitions read-only (the rmtfs package default). Read-only, the modem
+# loses what it saves (LTE attach APN, network preferences, the radio it
+# last used) at every boot. The files are copies of the partitions, made the
+# first time: the partitions themselves are never written, so removing
+# /var/lib/rmtfs (or reflashing) brings back the modem's original state.
+set -u
+umask 077
+
+DIR=/var/lib/rmtfs
+PARTS="modemst1:modem_fs1 modemst2:modem_fs2 fsg:modem_fsg fsc:modem_fsc"
+
+complete() {
+	for p in $PARTS; do
+		[ -s "$DIR/${p#*:}" ] || return 1
+	done
+}
+
+seed() {
+	tmp=$DIR.new
+	rm -rf "$tmp"
+	mkdir -m 700 "$tmp" || return 1
+	for p in $PARTS; do
+		dev=/dev/disk/by-partlabel/${p%%:*}
+		[ -b "$dev" ] || return 1
+		dd if="$dev" of="$tmp/${p#*:}" bs=64k status=none || return 1
+	done
+	sync
+	rm -rf "$DIR" && mv "$tmp" "$DIR"
+}
+
+if ! complete; then
+	if seed; then
+		echo "Modem storage copied from the eMMC partitions to $DIR."
+	else
+		echo "Could not copy the modem storage: serving the partitions read-only."
+		rm -rf "$DIR.new"
+		exec /usr/bin/rmtfs -r -P -s
+	fi
+fi
+exec /usr/bin/rmtfs -s -o "$DIR"

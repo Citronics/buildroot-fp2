@@ -1,14 +1,15 @@
 #!/bin/sh
 
 DAEMON="rmtfs"
-RMTFS_ARGS="-P -r -s"
+# Serves the modem storage from persistent copies of its partitions:
+# see /usr/libexec/citronics-rmtfs. The wrapper execs rmtfs, keeping the pid.
+WRAPPER="/usr/libexec/citronics-rmtfs"
 PIDFILE="/var/run/$DAEMON.pid"
 
 start() {
         printf 'Starting %s: ' "$DAEMON"
         start-stop-daemon --start --background --make-pidfile \
-                --pidfile "$PIDFILE" --exec "/usr/bin/$DAEMON" \
-		-- $RMTFS_ARGS
+                --pidfile "$PIDFILE" --exec "$WRAPPER"
         status=$?
         if [ "$status" -eq 0 ]; then
                 echo "OK"

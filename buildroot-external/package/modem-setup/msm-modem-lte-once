@@ -1,0 +1,52 @@
+#!/bin/sh
+# Once ModemManager has registered the modem: if it registered on 2G or 3G
+# although LTE is preferred, allow LTE only for a moment, then all radios
+# again. The modem searches the radio it last used first; once it has used
+# LTE, it keeps finding LTE at the following boots (its storage persists:
+# see /usr/libexec/citronics-rmtfs).
+set -u
+
+# field KEY: a value of mmcli's key-value output (exact key, no regex:
+# awk implementations differ on backslashes in -v values)
+field() {
+	mmcli -m any -K 2>/dev/null | awk -F': ' -v k="$1" '{ key = $1; sub(/ +$/, "", key) } key == k { print $2; exit }'
+}
+
+registered() {
+	case "$(field modem.generic.state)" in
+	registered|connecting|connected|disconnecting) return 0 ;;
+	esac
+	return 1
+}
+
+on_lte() {
+	field 'modem.generic.access-technologies.value[1]' | grep -q lte
+}
+
+for i in $(seq 1 90); do
+	registered && break
+	sleep 2
+done
+registered || { echo "Modem not registered: nothing to do."; exit 0; }
+on_lte && exit 0
+
+# Only with the default modes: an administrator's choice stays as is
+case "$(mmcli -m any 2>/dev/null | sed -n 's/.*current: allowed: \(.*\)$/\1/p' | head -1)" in
+"2g, 3g, 4g; preferred: 4g") ;;
+*) echo "Modes changed from the default: left as is."; exit 0 ;;
+esac
+
+echo "Registered on $(field 'modem.generic.access-technologies.value[1]'): looking for LTE."
+mmcli -m any --set-allowed-modes=4g >/dev/null || exit 0
+for i in $(seq 1 15); do
+	sleep 2
+	registered && on_lte && break
+done
+on_lte && found=yes || found=no
+mmcli -m any --set-allowed-modes='2g|3g|4g' --set-preferred-mode=4g >/dev/null
+if [ "$found" = yes ]; then
+	echo "Now on LTE."
+else
+	echo "No LTE found: all radios allowed again."
+fi
+exit 0

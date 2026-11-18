@@ -18,6 +18,7 @@ endef
 define RMTFS_INSTALL_TARGET_CMDS
     $(INSTALL) -D $(@D)/rmtfs $(TARGET_DIR)/usr/bin/rmtfs
     $(INSTALL) -D -m744 $(BR2_EXTERNAL)/package/rmtfs/S20rmtfs $(TARGET_DIR)/etc/init.d/S20rmtfs
+    $(INSTALL) -D -m755 $(BR2_EXTERNAL)/package/rmtfs/citronics-rmtfs $(TARGET_DIR)/usr/libexec/citronics-rmtfs
     $(INSTALL) -D -m644 $(BR2_EXTERNAL)/package/rmtfs/modem.rules $(TARGET_DIR)/usr/lib/udev/rules.d/55-modem.rules
     $(INSTALL) -D -m644 $(BR2_EXTERNAL)/package/rmtfs/rmtfs.rules $(TARGET_DIR)/usr/lib/udev/rules.d/65-rmtfs.rules
 endef

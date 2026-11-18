@@ -1,0 +1,85 @@
+#!/bin/sh
+# Before ModemManager starts: prefer LTE, and set the modem's LTE attach
+# profile to the APN of the NetworkManager GSM connection.
+#
+# The modem's own settings often come from Android: GSM first, and another
+# operator's attach APN, with which the network refuses the data connection
+# on LTE. ModemManager can fix the attach APN (gsm.initial-eps-bearer-apn),
+# but only by power cycling the modem at the first connection. Both are
+# written here, only when they differ; the modem keeps them in its storage
+# (see /usr/libexec/citronics-rmtfs).
+set -u
+
+# Ubuntu keeps NetworkManager connections in netplan, which generates the
+# keyfiles in /run before NetworkManager starts
+CONNECTIONS="/etc/NetworkManager/system-connections /run/NetworkManager/system-connections"
+
+# The FP2 modem has a QMI device node; the FP3 modem is reached over QRTR
+if [ -e /dev/wwan0qmi0 ]; then
+	Q="qmicli --silent -d /dev/wwan0qmi0 --device-open-qmi"
+else
+	Q="qmicli --silent -pd qrtr://0"
+fi
+$Q --dms-noop >/dev/null 2>&1 || { echo "No QMI modem: nothing to do."; exit 0; }
+
+# The order given is also the acquisition order. Some modems (the FP2's)
+# reject an acquisition order that does not list every radio technology;
+# others (the FP3's) then also take the CDMA ones into the mode preference:
+# try the three first.
+if ! $Q --nas-get-system-selection-preference 2>/dev/null |
+     grep -q "Acquisition order preference: 'lte"; then
+	if $Q --nas-set-system-selection-preference="lte|umts|gsm" >/dev/null 2>&1 ||
+	   $Q --nas-set-system-selection-preference="lte|umts|cdma-1xevdo|gsm|cdma-1x|td-scdma" >/dev/null; then
+		echo "Network preference set to LTE first."
+	else
+		echo "Could not set the network preference to LTE first."
+	fi
+fi
+
+# key FILE SECTION KEY: a value of a NetworkManager keyfile
+key() {
+	awk -F= -v s="[$2]" -v k="$3" '
+		/^\[/ { in_s = ($0 == s); next }
+		in_s && $1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1"
+}
+
+conn=
+for f in $(for d in $CONNECTIONS; do ls "$d"/*.nmconnection 2>/dev/null; done); do
+	[ -f "$f" ] || continue
+	[ "$(key "$f" connection type)" = gsm ] || continue
+	[ "$(key "$f" connection autoconnect)" = false ] && continue
+	conn=$f
+	break
+done
+[ -n "$conn" ] || { echo "No GSM connection: attach profile left as is."; exit 0; }
+
+apn=$(key "$conn" gsm initial-eps-bearer-apn)
+[ -n "$apn" ] || apn=$(key "$conn" gsm apn)
+[ -n "$apn" ] || { echo "$(basename "$conn"): no APN: attach profile left as is."; exit 0; }
+user=$(key "$conn" gsm initial-eps-bearer-username)
+password=$(key "$conn" gsm initial-eps-bearer-password)
+case "$(key "$conn" ipv6 method)" in
+disabled|ignore) pdp=IPV4; pdp_shown=ipv4 ;;
+*) pdp=IPV4V6; pdp_shown=ipv4-or-ipv6 ;;
+esac
+if [ -n "$user" ] || [ -n "$password" ]; then auth=BOTH; else auth=NONE; fi
+
+# The attach profile index, as ModemManager finds it
+idx=$($Q --wds-get-lte-attach-pdn-list 2>/dev/null | sed -n "s/.*Current list: '\([0-9]*\).*/\1/p")
+[ -n "$idx" ] || { echo "No LTE attach profile reported: nothing to do."; exit 0; }
+
+current=$($Q --wds-get-profile-list=3gpp 2>/dev/null |
+	sed -n "/^[[:space:]]*\[$idx\]/,/^[[:space:]]*\[[0-9]/p" | sed 's/^[[:space:]]*//')
+if printf '%s\n' "$current" | grep -qxF "APN: '$apn'" &&
+   printf '%s\n' "$current" | grep -qxF "PDP type: '$pdp_shown'" &&
+   printf '%s\n' "$current" | grep -qxF "Username: '$user'"; then
+	echo "Attach profile $idx already uses APN '$apn'."
+	exit 0
+fi
+
+if $Q --wds-modify-profile="3gpp,$idx,apn=$apn,pdp-type=$pdp,auth=$auth,username=$user,password=$password" >/dev/null; then
+	echo "Attach profile $idx set to APN '$apn' ($(basename "$conn" .nmconnection))."
+else
+	echo "Could not set attach profile $idx to APN '$apn'."
+fi
+exit 0

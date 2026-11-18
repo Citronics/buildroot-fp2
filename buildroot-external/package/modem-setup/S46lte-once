@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# S46lte-once - Once ModemManager has registered the modem, move it to LTE
+# if it registered on 2G or 3G. Runs in the background: registration can
+# take a minute.
+#
+
+case "$1" in
+start)
+	printf 'Starting lte-once: '
+	(/usr/libexec/msm-modem-lte-once 2>&1 | logger -t lte-once) &
+	echo "OK"
+	;;
+stop|restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
