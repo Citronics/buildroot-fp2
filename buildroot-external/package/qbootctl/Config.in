@@ -1,0 +1,10 @@
+config BR2_PACKAGE_QBOOTCTL
+	bool "qbootctl"
+	depends on BR2_TOOLCHAIN_HEADERS_AT_LEAST_4_9 # linux/bsg.h
+	help
+	  Qualcomm A/B slot control (linux-msm/qbootctl). On the
+	  Fairphone 3, marks the boot successful at the end of boot:
+	  otherwise the stock bootloader falls back to the other slot
+	  after a few boots, as Android would after a failed update.
+
+	  https://github.com/linux-msm/qbootctl
