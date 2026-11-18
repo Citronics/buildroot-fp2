@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# S99mark-boot-successful - Mark the current A/B slot as successfully
+# booted. Without it the stock bootloader falls back to the other slot
+# after a few boots (and to whatever bootloader is installed there).
+#
+
+case "$1" in
+start)
+	printf 'Marking the boot successful: '
+	qbootctl -m 2>&1 | logger -t mark-boot-successful
+	echo "OK"
+	;;
+stop|restart|reload)
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
